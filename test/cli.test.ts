@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, describe, test } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
+import { coverageTools } from "../src/registries.ts"
 
 const cli = join(import.meta.dirname, "..", "src", "cli.ts")
 const dir = await mkdtemp(join(tmpdir(), "atg-"))
@@ -28,18 +29,20 @@ const valid = {
   inputs: ["url", "task", "examples", "code"],
   agent: { name: "claude", model: "claude-opus-5-5" },
   framework: "playwright",
-  coverage_signal: ["lines", "html", "api"],
+  coverage_signal: ["lines"],
 }
 
 const keys = { enter: "\r", down: "\x1b[B", space: " ", backspace: "\x7f", ctrlC: "\x03" }
 
-const defaultAnswers = [keys.enter, keys.enter, keys.enter, `m1${keys.enter}`, keys.enter, keys.enter, keys.enter, keys.enter]
+const defaultAnswers = [keys.enter, keys.enter, keys.enter, `m1${keys.enter}`, ...Array(6).fill(keys.enter)]
 
 const prompts = [
   "App under test",
   "Inputs the agent is given",
   "Agent",
   "Model",
+  "Max turns",
+  "Max budget",
   "Test framework",
   "Coverage signal",
   "Timeout in minutes",
@@ -85,7 +88,8 @@ describe("atg validate", () => {
   test("rejects bad configs with readable errors and a non-zero exit", async () => {
     const files = await Promise.all([
       configFile("unknown-key.json", { ...valid, color: "red" }),
-      configFile("duplicate.json", { ...valid, coverage_signal: ["api", "api"] }),
+      configFile("duplicate.json", { ...valid, coverage_signal: ["lines", "lines"] }),
+      configFile("unimplemented-signal.json", { ...valid, coverage_signal: ["api"] }),
       configFile("unknown-app.json", { ...valid, app: "nope" }),
       configFile("missing-input.json", { ...valid, app: "demo-blog" }),
     ])
@@ -94,8 +98,21 @@ describe("atg validate", () => {
     assert.equal(result.status, 1)
     assert.match(result.stderr, /Unrecognized key: "color"/)
     assert.match(result.stderr, /must not repeat an item\n {2}→ at coverage_signal/)
+    assert.match(result.stderr, /coverage tool "api" is not implemented yet, so it cannot be a signal/)
     assert.match(result.stderr, /Invalid option: expected one of "demo-blog"\|"demo-todo"\n {2}→ at app/)
     assert.match(result.stderr, /app "demo-blog" does not provide "code"/)
+  })
+
+  test("the pilot config is Claude with all four inputs, every implemented signal tool, Playwright, rep 1 and a budget", () => {
+    const result = atg("validate", "--json", join(import.meta.dirname, "..", "configs", "pilot.json"))
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    const [{ config }] = JSON.parse(result.stdout)
+    assert.equal(config.agent.name, "claude")
+    assert.ok(config.agent.max_budget_usd > 0)
+    assert.deepEqual(config.inputs, ["code", "examples", "task", "url"])
+    assert.deepEqual(config.coverage_signal, coverageTools.filter(tool => tool.implemented).map(tool => tool.name))
+    assert.equal(config.framework, "playwright")
+    assert.equal(config.rep, 1)
   })
 
   test("fails when one of several files is invalid, and reports each as JSON", async () => {
@@ -167,26 +184,29 @@ describe("atg new", () => {
         keys.space + keys.down + keys.space + keys.down + keys.space + keys.down + keys.space + keys.enter,
         keys.enter,
         `claude-opus-5-5${keys.enter}`,
+        `50${keys.enter}`,
+        `2.5${keys.enter}`,
         keys.enter,
-        keys.space + keys.down + keys.space + keys.down + keys.space + keys.enter,
-        `${keys.backspace.repeat(2)}45${keys.enter}`,
-        `${keys.backspace}2${keys.enter}`,
+        keys.space + keys.enter,
+        `45${keys.enter}`,
+        `2${keys.enter}`,
       ],
     )
     assert.equal(code, 0, output)
     assert.match(output, /Codex CLI \(not implemented yet\)/)
-    const config = JSON.parse(await readFile(out, "utf8"))
-    assert.deepEqual(config, {
+    assert.match(output, /HTML elements exercised \(not implemented yet\)/)
+    assert.deepEqual(JSON.parse(await readFile(out, "utf8")), {
       ...valid,
       inputs: ["code", "examples", "task", "url"],
-      coverage_signal: ["api", "html", "lines"],
+      agent: { ...valid.agent, max_turns: 50, max_budget_usd: 2.5 },
+      coverage_signal: ["lines"],
       timeout_min: 45,
       rep: 2,
     })
     assert.equal(atg("validate", out).status, 0)
   })
 
-  test("accepts the empty input set and names the file after the run_id", async () => {
+  test("accepts the empty input set, leaves caps unset and names the file after the run_id", async () => {
     const cwd = await mkdtemp(join(dir, "cwd-"))
     const { code, output } = await wizard([], defaultAnswers, cwd)
     assert.equal(code, 0, output)
@@ -194,23 +214,67 @@ describe("atg new", () => {
     const config = JSON.parse(await readFile(join(cwd, `${id}.json`), "utf8"))
     assert.deepEqual(config.inputs, [])
     assert.deepEqual(config.coverage_signal, [])
+    assert.deepEqual(config.agent, { name: "claude", model: "m1" })
     assert.equal(config.app, "demo-blog")
   })
 
-  test("--from prefills every answer and keeps agent limits", async () => {
-    const from = await configFile("from.json", {
-      ...valid,
-      inputs: ["task", "code"],
-      agent: { ...valid.agent, max_turns: 30 },
-      coverage_signal: ["html"],
-      timeout_min: 20,
-      rep: 3,
-    })
+  const source = {
+    ...valid,
+    inputs: ["task", "code"],
+    agent: { ...valid.agent, max_turns: 30, max_budget_usd: 2.5 },
+    coverage_signal: ["lines"],
+    timeout_min: 20,
+    rep: 3,
+  }
+
+  test("--from with Enter on every prompt reproduces the source config and run_id", async () => {
+    const from = await configFile("from.json", source)
     const out = join(dir, "from-out.json")
     const { code, output } = await wizard(["--from", from, "--out", out], prompts.map(() => keys.enter))
     assert.equal(code, 0, output)
-    const expected = JSON.parse(atg("validate", "--json", from).stdout)[0].config
-    assert.deepEqual(JSON.parse(await readFile(out, "utf8")), expected)
+    const [expected] = JSON.parse(atg("validate", "--json", from).stdout)
+    const [written] = JSON.parse(atg("validate", "--json", out).stdout)
+    assert.deepEqual(written.config, expected.config)
+    assert.equal(written.run_id, expected.run_id)
+    assert.match(output, new RegExp(`run_id ${expected.run_id}`))
+  })
+
+  test("--from shows defaults that typing replaces", async () => {
+    const from = await configFile("from-typed.json", source)
+    const out = join(dir, "from-typed-out.json")
+    const answers = prompts.map(() => keys.enter)
+    answers[3] = `other-model${keys.enter}`
+    answers[4] = `80${keys.enter}`
+    answers[5] = `10${keys.enter}`
+    answers[8] = `45${keys.enter}`
+    answers[9] = `4${keys.enter}`
+    const { code, output } = await wizard(["--from", from, "--out", out], answers)
+    assert.equal(code, 0, output)
+    const config = JSON.parse(await readFile(out, "utf8"))
+    assert.deepEqual(config.agent, { name: "claude", model: "other-model", max_turns: 80, max_budget_usd: 10 })
+    assert.equal(config.timeout_min, 45)
+    assert.equal(config.rep, 4)
+  })
+
+  test("names the field and the rule when an answer is invalid", async () => {
+    const out = join(dir, "invalid-answers.json")
+    const answers = [...defaultAnswers]
+    answers[3] = `${keys.enter}m1${keys.enter}`
+    answers[4] = `abc${keys.enter}${keys.backspace.repeat(3)}${keys.enter}`
+    answers[5] = `-1${keys.enter}${keys.backspace.repeat(2)}3${keys.enter}`
+    answers[8] = `0${keys.enter}${keys.backspace}45${keys.enter}`
+    answers[9] = `x${keys.enter}${keys.backspace}2${keys.enter}`
+    const { code, output } = await wizard(["--out", out], answers)
+    assert.equal(code, 0, output)
+    assert.match(output, /model must not be empty/)
+    assert.match(output, /max_turns must be a whole number above 0, or empty for no limit/)
+    assert.match(output, /max_budget_usd must be a number above 0, or empty for no limit/)
+    assert.match(output, /timeout_min must be a whole number above 0/)
+    assert.match(output, /rep must be a whole number above 0/)
+    const config = JSON.parse(await readFile(out, "utf8"))
+    assert.deepEqual(config.agent, { name: "claude", model: "m1", max_budget_usd: 3 })
+    assert.equal(config.timeout_min, 45)
+    assert.equal(config.rep, 2)
   })
 
   for (const [index, prompt] of prompts.entries()) {

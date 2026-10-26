@@ -2,8 +2,9 @@ import { existsSync } from "node:fs"
 import { cp, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { startApp } from "../app-runtime.ts"
+import { signalCommand } from "../commands/signal.ts"
 import { writeJson } from "../json.ts"
-import { runWithTimeout } from "../process.ts"
+import { quote, runWithTimeout } from "../process.ts"
 import { agentEntry, type AgentResult, frameworkEntry, type Invocation } from "../registries.ts"
 import { mergeEnv, readRun, runFiles } from "../run-folder.ts"
 
@@ -17,7 +18,10 @@ export async function agentInvocation(runDir: string) {
     prompt,
     agent: config.agent,
     timeLimitMs: deadline - Date.now(),
-    commands: [frameworkEntry(config.framework).adapter.testCommand],
+    commands: [
+      frameworkEntry(config.framework).adapter.testCommand,
+      ...(config.coverage_signal.length > 0 ? [signalCommand] : []),
+    ],
   })
   const baseEnv: Record<string, string> = {}
   for (const name of passedEnv) {
@@ -38,7 +42,7 @@ export async function generate(runDir: string) {
   const agent = agentEntry(config.agent.name).adapter
   const invocation = await agentInvocation(runDir)
   const instance = await startApp(app, env.app.fixed.sha, join(runDir, "app-generate.log"))
-  if (!config.inputs.includes("url")) await instance.stop()
+  if (!config.inputs.includes("url") && config.coverage_signal.length === 0) await instance.stop()
   try {
     const stdout = join(runDir, runFiles.agentStdout)
     const stderr = join(runDir, runFiles.agentStderr)
@@ -69,10 +73,6 @@ export async function generate(runDir: string) {
   }
   const tests = join(env.workspace, frameworkEntry(config.framework).adapter.testDir)
   if (existsSync(tests)) await cp(tests, join(runDir, runFiles.tests), { recursive: true })
-}
-
-function quote(text: string) {
-  return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", `'\\''`)}'`
 }
 
 function secret(key: string) {

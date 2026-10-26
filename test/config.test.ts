@@ -19,7 +19,7 @@ const base = {
   inputs: ["url", "code"],
   agent: { name: "claude", model: "claude-opus-5-5" },
   framework: "playwright",
-  coverage_signal: ["lines", "api"],
+  coverage_signal: ["lines"],
 }
 
 const versions = { fixed: "1".repeat(40), buggy: "2".repeat(40) }
@@ -46,7 +46,14 @@ describe("config schema", () => {
 
   test("rejects duplicates in subsets", () => {
     assert.match(errorOf({ ...base, inputs: ["url", "url"] }), /must not repeat an item\n {2}→ at inputs/)
-    assert.match(errorOf({ ...base, coverage_signal: ["api", "api"] }), /must not repeat an item\n {2}→ at coverage_signal/)
+    assert.match(errorOf({ ...base, coverage_signal: ["lines", "lines"] }), /must not repeat an item\n {2}→ at coverage_signal/)
+  })
+
+  test("rejects a signal tool that is not implemented", () => {
+    assert.match(
+      errorOf({ ...base, coverage_signal: ["html", "lines"] }),
+      /coverage tool "html" is not implemented yet, so it cannot be a signal\n {2}→ at coverage_signal/,
+    )
   })
 
   test("rejects an unknown app", () => {
@@ -61,7 +68,6 @@ describe("config schema", () => {
     assert.deepEqual(schema.parse({ ...base, inputs: ["url", "code"] }), {
       ...base,
       inputs: ["code", "url"],
-      coverage_signal: ["api", "lines"],
       timeout_min: 30,
       rep: 1,
     })
@@ -79,7 +85,7 @@ describe("run_id", () => {
     const reordered = Object.fromEntries(Object.entries(base).toReversed())
     const variants = [
       reordered,
-      { ...base, inputs: ["code", "url"], coverage_signal: ["api", "lines"] },
+      { ...base, inputs: ["code", "url"] },
       { ...base, timeout_min: 30, rep: 1 },
     ]
     for (const variant of variants) {
@@ -113,8 +119,8 @@ describe("run_id", () => {
 
   test("resolves the demo app refs to the commits in its bundle", async () => {
     assert.deepEqual(await resolveVersions(findApp(apps, "demo-todo")), {
-      fixed: "ab790e411121e24322f451b25d4d3704330bc892",
-      buggy: "f33d70a1b124485a7bed13abdd2293e9f00ba865",
+      fixed: "f61478d89c5fb5b07dc13f560690166b2c51b387",
+      buggy: "b093525ac628b7701a402bb664306f553fbd1c2c",
     })
   })
 

@@ -43,8 +43,12 @@ export async function newConfig(options: { out?: string; from?: string }) {
     }),
   )
   const agent = answer(await select({ message: "Agent", options: choices(agents), initialValue: from?.agent.name }))
-  const model = answer(
-    await text({ message: "Model", initialValue: from?.agent.model, validate: value => (value ? undefined : "Enter a model") }),
+  const model = await ask("Model", from?.agent.model, value => (value ? undefined : "model must not be empty"))
+  const maxTurns = await ask("Max turns (empty for no limit)", from?.agent.max_turns?.toString(), value =>
+    !value || isWholeAboveZero(value) ? undefined : "max_turns must be a whole number above 0, or empty for no limit",
+  )
+  const maxBudget = await ask("Max budget in USD (empty for no limit)", from?.agent.max_budget_usd?.toString(), value =>
+    !value || isAmountAboveZero(value) ? undefined : "max_budget_usd must be a number above 0, or empty for no limit",
   )
   const framework = answer(
     await select({ message: "Test framework", options: choices(frameworks), initialValue: from?.framework }),
@@ -53,26 +57,27 @@ export async function newConfig(options: { out?: string; from?: string }) {
     await multiselect({
       message: "Coverage signal shown to the agent (evaluation always measures all of them)",
       options: choices(coverageTools),
-      initialValues: from?.coverage_signal,
+      initialValues: from?.coverage_signal.filter(name => offered(coverageTools).includes(name)),
       required: false,
     }),
   )
-  const timeout = answer(
-    await text({
-      message: "Timeout in minutes",
-      initialValue: String(from?.timeout_min ?? defaults.timeout_min),
-      validate: positiveInt,
-    }),
+  const timeout = await ask("Timeout in minutes", String(from?.timeout_min ?? defaults.timeout_min), value =>
+    isWholeAboveZero(value) ? undefined : "timeout_min must be a whole number above 0",
   )
-  const rep = answer(
-    await text({ message: "Repetition", initialValue: String(from?.rep ?? defaults.rep), validate: positiveInt }),
+  const rep = await ask("Repetition", String(from?.rep ?? defaults.rep), value =>
+    isWholeAboveZero(value) ? undefined : "rep must be a whole number above 0",
   )
 
   const draft = {
     schema: 1,
     app: app.id,
     inputs: chosenInputs,
-    agent: { ...from?.agent, name: agent, model },
+    agent: {
+      name: agent,
+      model,
+      max_turns: maxTurns ? Number(maxTurns) : undefined,
+      max_budget_usd: maxBudget ? Number(maxBudget) : undefined,
+    },
     framework,
     coverage_signal: coverageSignal,
     timeout_min: Number(timeout),
@@ -83,6 +88,10 @@ export async function newConfig(options: { out?: string; from?: string }) {
   const out = options.out ?? `${id}.json`
   await writeFile(out, `${JSON.stringify(config, null, 2)}\n`)
   outro(`Wrote ${out}\nrun_id ${id}`)
+}
+
+function offered(registry: Descriptor[]) {
+  return registry.filter(entry => entry.implemented).map(entry => entry.name)
 }
 
 function choices(registry: Descriptor[]) {
@@ -102,8 +111,23 @@ function answer<T>(value: T | typeof CANCEL_SYMBOL): T {
   return value
 }
 
-function positiveInt(value: string | undefined) {
-  return /^[1-9]\d*$/.test(value ?? "") ? undefined : "Enter a whole number above 0"
+async function ask(message: string, fallback: string | undefined, check: (value: string) => string | undefined) {
+  return answer(
+    await text({
+      message,
+      placeholder: fallback,
+      defaultValue: fallback,
+      validate: value => (!value && fallback !== undefined ? undefined : check(value ?? "")),
+    }),
+  )
+}
+
+function isWholeAboveZero(value: string) {
+  return /^[1-9]\d*$/.test(value)
+}
+
+function isAmountAboveZero(value: string) {
+  return Number.isFinite(Number(value)) && Number(value) > 0
 }
 
 function valid<T>(result: z.ZodSafeParseResult<T>, source: string) {

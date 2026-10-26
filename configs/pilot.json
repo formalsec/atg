@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "app": "demo-todo",
+  "inputs": ["code", "examples", "task", "url"],
+  "agent": { "name": "claude", "model": "claude-opus-5-5", "max_budget_usd": 5 },
+  "framework": "playwright",
+  "coverage_signal": ["lines"],
+  "timeout_min": 30,
+  "rep": 1
+}

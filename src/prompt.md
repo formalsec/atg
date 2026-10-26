@@ -13,3 +13,4 @@ Rules:
 - Navigate with relative URLs only, for example `/`. The base URL is set for you, and the suite will also run against other instances of the app.
 - Make each test independent of the others, and check what the user sees after each action.
 [url] - Run the suite with `{{test_command}}` and fix it until every test passes on this app. That command is your only way to reach the app: you have no browser or network tool, so to look at a page, write a test that opens it and prints what you need.
+[signal] - Run `{{signal_command}}` to measure your current tests: it runs them against the app and prints how much of the app they cover and what they leave uncovered.

@@ -51,6 +51,14 @@ export function configSchema(apps: App[]) {
           message: `app "${config.app}" does not provide "${input}" (it provides: ${provided.join(", ") || "nothing"})`,
         })
       }
+      const implemented = coverageTools.filter(tool => tool.implemented).map(tool => tool.name)
+      for (const tool of config.coverage_signal.filter(tool => !implemented.includes(tool))) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["coverage_signal"],
+          message: `coverage tool "${tool}" is not implemented yet, so it cannot be a signal`,
+        })
+      }
     })
 }
 

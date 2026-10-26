@@ -49,16 +49,18 @@ export const playwright: FrameworkAdapter = {
   testDir,
   testCommand: "npx playwright test",
   scaffold: (dir, baseUrl) => project(dir, agentConfig(baseUrl)),
-  async run({ testsDir, baseUrl, reportFile, logFile, timeoutMs }) {
+  async run({ testsDir, baseUrl, reportFile, logFile, timeoutMs, collectors }) {
     const dir = await tempDir("atg-suite-")
     try {
       await project(dir, suiteConfig(reportFile, timeoutMs))
+      await writeFile(join(dir, "node_modules", "@playwright", "test", "index.js"), fixture)
+      await writeFile(join(dir, "node_modules", "@playwright", "test", "index.mjs"), fixtureModule)
       if (existsSync(testsDir)) await cp(testsDir, join(dir, testDir), { recursive: true })
       const browser = await browserVersion(dir)
       await rm(reportFile, { force: true })
       await runWithTimeout(process.execPath, [join(dir, "node_modules", "@playwright", "test", "cli.js"), "test"], {
         cwd: dir,
-        env: { ...process.env, BASE_URL: baseUrl },
+        env: { ...process.env, BASE_URL: baseUrl, ATG_COLLECTORS: JSON.stringify(collectors) },
         stdout: logFile,
         stderr: logFile,
         timeoutMs: timeoutMs + killGraceMs,
@@ -114,6 +116,29 @@ export default defineConfig({
 })
 `
 }
+
+const fixture = `const playwright = require("playwright/test")
+
+const collectors = JSON.parse(process.env.ATG_COLLECTORS)
+
+const test = playwright.test.extend({
+  page: async ({ page }, use) => {
+    const stops = []
+    for (const { module, dir } of collectors) stops.push(await (await import(module)).collect(page, dir))
+    await use(page)
+    for (const stop of stops) await stop()
+  },
+})
+
+module.exports = { ...playwright, test, default: test }
+`
+
+const fixtureModule = `import atg from "./index.js"
+
+export * from "playwright/test"
+export const test = atg.test
+export default atg.test
+`
 
 function collect(suite: Suite, titles: string[]): SuiteResult["tests"] {
   return [

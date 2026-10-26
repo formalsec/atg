@@ -1,10 +1,8 @@
 import { readFile } from "node:fs/promises"
-import type { Input } from "./apps.ts"
 
 export const promptTemplate = await readFile(new URL("prompt.md", import.meta.url), "utf8")
 
-export function renderPrompt(template: string, inputs: Input[], values: Record<string, string>) {
-  const tags: string[] = inputs.length > 0 ? inputs : ["none"]
+export function renderPrompt(template: string, tags: string[], values: Record<string, string>) {
   return template
     .split("\n")
     .flatMap(line => {

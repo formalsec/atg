@@ -17,6 +17,7 @@ export async function evaluate(runDir: string) {
       reportFile: join(results, "fixed-report.json"),
       logFile: join(results, "fixed-run.log"),
       timeoutMs: config.timeout_min * 60_000,
+      collectors: [],
     })
     await writeJson(join(results, "fixed.json"), suite)
     await mergeEnv(runDir, { framework: { name: config.framework, versions } })

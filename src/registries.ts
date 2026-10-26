@@ -1,6 +1,8 @@
 import * as z from "zod"
 import { claude } from "./adapters/claude.ts"
+import { monocart } from "./adapters/monocart.ts"
 import { playwright } from "./adapters/playwright.ts"
+import type { App } from "./apps.ts"
 import type { Check } from "./check.ts"
 import type { Config } from "./config.ts"
 
@@ -61,7 +63,16 @@ export const suiteResultSchema = z.object({
 
 export type SuiteResult = z.infer<typeof suiteResultSchema>
 
-export type SuiteRun = { testsDir: string; baseUrl: string; reportFile: string; logFile: string; timeoutMs: number }
+export type Collector = { module: string; dir: string }
+
+export type SuiteRun = {
+  testsDir: string
+  baseUrl: string
+  reportFile: string
+  logFile: string
+  timeoutMs: number
+  collectors: Collector[]
+}
 
 export type FrameworkAdapter = {
   testDir: string
@@ -70,6 +81,26 @@ export type FrameworkAdapter = {
   run(suite: SuiteRun): Promise<SuiteResult & { versions: Record<string, string> }>
   checks(): Promise<Check[]>
 }
+
+export const coverageSchema = z.object({
+  covered: z.number(),
+  total: z.number(),
+  pct: z.number(),
+  report: z.string(),
+  uncovered: z.array(z.string()),
+})
+
+export type Coverage = z.infer<typeof coverageSchema>
+
+export type CoverageRun = { app: App; source: string; baseUrl: string; dir: string }
+
+export type CoverageAdapter = {
+  collector?: string
+  universe?(run: CoverageRun): Promise<void>
+  report(run: CoverageRun): Promise<Coverage | null>
+}
+
+const notMeasured: CoverageAdapter = { report: async () => null }
 
 export const agents: (Descriptor & { adapter?: AgentAdapter })[] = [
   { name: "claude", label: "Claude Code", implemented: true, adapter: claude },
@@ -83,10 +114,10 @@ export const frameworks: (Descriptor & { adapter?: FrameworkAdapter })[] = [
   { name: "cypress", label: "Cypress", implemented: false },
 ]
 
-export const coverageTools: Descriptor[] = [
-  { name: "lines", label: "Lines of app code executed", implemented: true },
-  { name: "html", label: "HTML elements exercised", implemented: true },
-  { name: "api", label: "API endpoints called", implemented: true },
+export const coverageTools: (Descriptor & { adapter: CoverageAdapter })[] = [
+  { name: "lines", label: "Browser-side line coverage", implemented: true, adapter: monocart },
+  { name: "html", label: "HTML elements exercised", implemented: false, adapter: notMeasured },
+  { name: "api", label: "API endpoints called", implemented: false, adapter: notMeasured },
 ]
 
 export function agentEntry(name: string) {

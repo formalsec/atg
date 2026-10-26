@@ -5,6 +5,7 @@ import { arch, homedir, release, tmpdir, type } from "node:os"
 import { basename, isAbsolute, join, relative } from "node:path"
 import { promisify } from "node:util"
 import { type App, appDir, type Input } from "../apps.ts"
+import { installSignal, signalCommand } from "../commands/signal.ts"
 import type { Config } from "../config.ts"
 import { writeJson } from "../json.ts"
 import { promptTemplate, renderPrompt } from "../prompt.ts"
@@ -36,12 +37,16 @@ export async function prepare(runDir: string, config: Config, app: App, versions
   const url = config.inputs.includes("url") ? app.url : undefined
   await framework.adapter.scaffold(workspace, url)
   for (const input of config.inputs) await copyInput(input, app, versions.fixed, workspace)
-  const prompt = renderPrompt(promptTemplate, config.inputs, {
+  const signal = config.coverage_signal.length > 0
+  if (signal) await installSignal(workspace, runDir)
+  const tags = [...(config.inputs.length > 0 ? config.inputs : ["none"]), ...(signal ? ["signal"] : [])]
+  const prompt = renderPrompt(promptTemplate, tags, {
     framework: framework.label,
     test_dir: framework.adapter.testDir,
     test_command: framework.adapter.testCommand,
     ...(url === undefined ? {} : { url }),
     ...(config.inputs.includes("task") && app.stories_file ? { task_file: basename(app.stories_file) } : {}),
+    ...(signal ? { signal_command: signalCommand } : {}),
   })
   await writeFile(join(runDir, runFiles.prompt), prompt)
 }

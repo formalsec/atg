@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { mkdir, writeFile } from "node:fs/promises"
 import { setTimeout as sleep } from "node:timers/promises"
 
@@ -39,6 +39,11 @@ if (mode === "hang") {
   const helper = spawn("sleep", ["300"], { detached: true, stdio: "ignore" })
   console.log(JSON.stringify({ pids: [process.pid, helper.pid] }))
   await sleep(600_000)
+}
+
+if (mode === "signal") {
+  await writeFile("tests/todo.spec.ts", header + addsTodo + rest)
+  console.log(execFileSync("./coverage", { encoding: "utf8" }))
 }
 
 if (mode === "slow") {

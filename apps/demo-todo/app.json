@@ -4,6 +4,7 @@
   "url": "http://localhost:4173",
   "start": "node server.mjs",
   "code_dir": ".",
+  "browser_dir": "public",
   "stories_file": "stories.md",
   "examples_dir": "examples",
   "fixed_ref": "v1.0.0",

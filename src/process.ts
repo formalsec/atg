@@ -85,3 +85,7 @@ function signal(pid: number, name: NodeJS.Signals) {
     process.kill(pid, name)
   } catch {}
 }
+
+export function quote(text: string) {
+  return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", `'\\''`)}'`
+}

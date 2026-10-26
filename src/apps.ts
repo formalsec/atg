@@ -13,6 +13,7 @@ export const appSchema = z
     url: z.url().optional(),
     start: z.string().min(1).optional(),
     code_dir: z.string().min(1).optional(),
+    browser_dir: z.string().min(1).optional(),
     stories_file: z.string().min(1).optional(),
     examples_dir: z.string().min(1).optional(),
     fixed_ref: z.string().min(1),
@@ -39,7 +40,7 @@ export function findApp(apps: App[], id: string) {
   return app
 }
 
-const appsDir = resolve(process.env.ATG_APPS_DIR ?? join(import.meta.dirname, "..", "apps"))
+export const appsDir = resolve(process.env.ATG_APPS_DIR ?? join(import.meta.dirname, "..", "apps"))
 
 export function appDir(app: App) {
   return join(appsDir, app.id)
