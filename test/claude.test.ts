@@ -1,0 +1,123 @@
+import assert from "node:assert/strict"
+import { describe, test } from "node:test"
+import { claude } from "../src/adapters/claude.ts"
+
+const input = {
+  workspace: "/w",
+  prompt: "write tests",
+  agent: { name: "claude", model: "m1", max_turns: 5, max_budget_usd: 2 },
+  timeLimitMs: 60_000,
+  commands: ["npx playwright test"],
+}
+
+const usage = (tokens: number, costUSD: number) => ({
+  inputTokens: tokens,
+  outputTokens: tokens * 2,
+  cacheReadInputTokens: tokens * 3,
+  cacheCreationInputTokens: tokens * 4,
+  costUSD,
+  costBasis: "list",
+})
+
+const result = (fields: object) =>
+  JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    num_turns: 4,
+    duration_ms: 900,
+    duration_api_ms: 700,
+    result: "done",
+    modelUsage: { "claude-opus-5-5": usage(10, 0.5), "claude-haiku-5-5": usage(1, 0.25) },
+    ...fields,
+  })
+
+const parse = (stdout: string) => claude.parse({ stdout, stderr: "", code: 0 })
+
+function withApiKey<T>(value: string | undefined, run: () => T) {
+  const saved = process.env.ANTHROPIC_API_KEY
+  if (value === undefined) delete process.env.ANTHROPIC_API_KEY
+  else process.env.ANTHROPIC_API_KEY = value
+  try {
+    return run()
+  } finally {
+    if (saved === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = saved
+  }
+}
+
+describe("claude adapter invocation", () => {
+  test("runs headless with limits, dontAsk and an explicit tool list", () => {
+    const { command, args } = withApiKey(undefined, () => claude.invocation(input))
+    assert.equal(command, "claude")
+    const line = args.join(" ")
+    for (const part of [
+      "-p --output-format json --model m1 --max-turns 5 --max-budget-usd 2",
+      "--permission-mode dontAsk",
+      "--allowedTools Read(./**) Edit(./**) Write(./**) Bash(npx playwright test) Bash(npx playwright test *)",
+      "--no-session-persistence --strict-mcp-config",
+    ]) {
+      assert.ok(line.includes(part), `missing "${part}" in ${line}`)
+    }
+  })
+
+  test("without an API key, skips setting sources and excludes user memory", () => {
+    const { args, env, isolation } = withApiKey(undefined, () => claude.invocation(input))
+    assert.equal(isolation, "settings")
+    assert.deepEqual(env, {})
+    assert.equal(args.includes("--bare"), false)
+    assert.equal(args[args.indexOf("--setting-sources") + 1], "")
+    const settings = JSON.parse(args[args.indexOf("--settings") + 1])
+    assert.equal(settings.autoMemoryEnabled, false)
+    assert.match(settings.claudeMdExcludes[0], /\/\.claude\/\*\*$/)
+  })
+
+  test("with an API key, runs bare and passes only that key", () => {
+    const { args, env, isolation } = withApiKey("sk-test", () => claude.invocation(input))
+    assert.equal(isolation, "bare")
+    assert.deepEqual(env, { ANTHROPIC_API_KEY: "sk-test" })
+    assert.ok(args.includes("--bare"))
+    assert.equal(args.includes("--setting-sources"), false)
+  })
+
+  test("leaves out limits that are not set", () => {
+    const { args } = claude.invocation({ ...input, agent: { name: "claude", model: "m1" } })
+    assert.equal(args.includes("--max-turns"), false)
+    assert.equal(args.includes("--max-budget-usd"), false)
+  })
+})
+
+describe("claude adapter result", () => {
+  test("sums tokens and cost over every model and keeps the model ids", () => {
+    assert.deepEqual(parse(result({})), {
+      status: "ok",
+      stop_reason: "success",
+      error: undefined,
+      turns: 4,
+      duration_ms: 900,
+      api_duration_ms: 700,
+      tokens: { input: 11, output: 22, cache_read: 33, cache_creation: 44 },
+      cost_usd: 0.75,
+      cost_source: "estimate:list",
+      models: ["claude-opus-5-5", "claude-haiku-5-5"],
+    })
+  })
+
+  test("a turn or budget limit is a finished run with its stop reason", () => {
+    for (const subtype of ["error_max_turns", "error_max_budget_usd"]) {
+      const parsed = parse(result({ subtype, is_error: true }))
+      assert.equal(parsed.status, "ok")
+      assert.equal(parsed.stop_reason, subtype)
+    }
+  })
+
+  test("an execution error, an auth failure or no JSON is an agent error", () => {
+    assert.equal(parse(result({ subtype: "error_during_execution", is_error: true })).status, "agent_error")
+    const auth = parse(result({ is_error: true, result: "Invalid API key", modelUsage: {} }))
+    assert.equal(auth.status, "agent_error")
+    assert.equal(auth.error, "Invalid API key")
+    const garbage = claude.parse({ stdout: "not json", stderr: "boom", code: 1 })
+    assert.equal(garbage.status, "agent_error")
+    assert.match(garbage.error ?? "", /^no parseable result \(exit 1: boom\)$/)
+  })
+})

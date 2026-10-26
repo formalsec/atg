@@ -31,7 +31,11 @@ export function configSchema(apps: App[]) {
         names(coverageTools),
         "Coverage the agent is shown as feedback while it works. This is the treatment, not the measurement: evaluation always measures every coverage tool.",
       ),
-      timeout_min: z.int().positive().default(defaults.timeout_min),
+      timeout_min: z
+        .number()
+        .positive()
+        .default(defaults.timeout_min)
+        .meta({ description: "Wall-clock limit in minutes for preparing and generating. Fractions are allowed." }),
       rep: z
         .int()
         .positive()

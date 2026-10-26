@@ -1,9 +1,14 @@
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, test } from "node:test"
 import * as z from "zod"
 import { findApp, loadApps } from "../src/apps.ts"
 import { configSchema } from "../src/config.ts"
-import { runId } from "../src/run-id.ts"
+import { resolveVersions } from "../src/repo.ts"
+import { identify, runId } from "../src/run-id.ts"
 
 const apps = await loadApps()
 const schema = configSchema(apps)
@@ -17,8 +22,10 @@ const base = {
   coverage_signal: ["lines", "api"],
 }
 
-function idOf(data: unknown, refs = findApp(apps, "demo-todo")) {
-  return runId(schema.parse(data), refs)
+const versions = { fixed: "1".repeat(40), buggy: "2".repeat(40) }
+
+function idOf(data: unknown, shas = versions, template = "template v1") {
+  return runId(schema.parse(data), shas, template)
 }
 
 function errorOf(data: unknown) {
@@ -98,9 +105,36 @@ describe("run_id", () => {
     assert.equal(new Set([id, ...ids]).size, changes.length + 1)
   })
 
-  test("changes when an app ref changes", () => {
-    const app = findApp(apps, "demo-todo")
-    assert.notEqual(idOf(base, { ...app, fixed_ref: "v9" }), id)
-    assert.notEqual(idOf(base, { ...app, buggy_ref: "v9-buggy" }), id)
+  test("changes when a resolved commit or the prompt template changes", () => {
+    assert.notEqual(idOf(base, { ...versions, fixed: "3".repeat(40) }), id)
+    assert.notEqual(idOf(base, { ...versions, buggy: "3".repeat(40) }), id)
+    assert.notEqual(idOf(base, versions, "template v2"), id)
+  })
+
+  test("resolves the demo app refs to the commits in its bundle", async () => {
+    assert.deepEqual(await resolveVersions(findApp(apps, "demo-todo")), {
+      fixed: "ab790e411121e24322f451b25d4d3704330bc892",
+      buggy: "f33d70a1b124485a7bed13abdd2293e9f00ba865",
+    })
+  })
+
+  test("moving a ref to another commit gives a new run_id", async t => {
+    const repo = await mkdtemp(join(tmpdir(), "atg-moving-ref-"))
+    t.after(() => rm(repo, { recursive: true, force: true }))
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, "-c", "user.name=atg", "-c", "user.email=atg@example.invalid", ...args])
+    git("init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "one")
+    git("tag", "fixed")
+    git("tag", "buggy")
+    const app = { ...findApp(apps, "demo-todo"), repo, fixed_ref: "fixed", buggy_ref: "buggy" }
+    const config = schema.parse(base)
+    const first = await identify(config, app)
+    git("commit", "-q", "--allow-empty", "-m", "two")
+    git("tag", "-f", "fixed")
+    const second = await identify(config, app)
+    assert.notEqual(second.versions.fixed, first.versions.fixed)
+    assert.equal(second.versions.buggy, first.versions.buggy)
+    assert.notEqual(second.id, first.id)
   })
 })

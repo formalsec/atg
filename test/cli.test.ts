@@ -226,8 +226,15 @@ describe("atg new", () => {
 
 describe("help", () => {
   test("lists every command and flag", () => {
-    assert.match(atg("--help").stdout, /validate[\s\S]*schema[\s\S]*apps[\s\S]*new/)
-    const flags = { validate: ["--json"], schema: ["--out <file>"], apps: ["--json"], new: ["--out <file>", "--from <config>"] }
+    assert.match(atg("--help").stdout, /validate[\s\S]*schema[\s\S]*apps[\s\S]*new[\s\S]*run[\s\S]*doctor/)
+    const flags = {
+      validate: ["--json"],
+      schema: ["--out <file>"],
+      apps: ["--json"],
+      new: ["--out <file>", "--from <config>"],
+      run: ["--dry-run", "--force", "--runs-dir <dir>", "--keep-workspace"],
+      doctor: [],
+    }
     for (const [command, expected] of Object.entries(flags)) {
       const help = atg(command, "--help").stdout
       for (const flag of expected) assert.ok(help.includes(flag), `${command} --help lacks ${flag}`)

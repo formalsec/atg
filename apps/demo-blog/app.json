@@ -1,5 +1,6 @@
 {
   "id": "demo-blog",
+  "repo": "repo.bundle",
   "url": "https://blog.example.com",
   "stories_file": "stories.md",
   "examples_dir": "examples",

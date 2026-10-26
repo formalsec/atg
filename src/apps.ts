@@ -1,5 +1,5 @@
 import { readdir } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { basename, join, resolve } from "node:path"
 import * as z from "zod"
 import { readJson } from "./json.ts"
 
@@ -9,6 +9,7 @@ export type Input = (typeof inputs)[number]
 export const appSchema = z
   .strictObject({
     id: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "use lowercase kebab-case"),
+    repo: z.string().min(1),
     url: z.url().optional(),
     start: z.string().min(1).optional(),
     code_dir: z.string().min(1).optional(),
@@ -38,7 +39,11 @@ export function findApp(apps: App[], id: string) {
   return app
 }
 
-const appsDir = join(import.meta.dirname, "..", "apps")
+const appsDir = resolve(process.env.ATG_APPS_DIR ?? join(import.meta.dirname, "..", "apps"))
+
+export function appDir(app: App) {
+  return join(appsDir, app.id)
+}
 
 export async function loadApps() {
   const entries = await readdir(appsDir, { withFileTypes: true })

@@ -5,7 +5,7 @@ import { findApp, type Input, inputs, loadApps, providedInputs } from "../apps.t
 import { configSchema, defaults } from "../config.ts"
 import { readJson } from "../json.ts"
 import { agents, coverageTools, type Descriptor, frameworks } from "../registries.ts"
-import { runId } from "../run-id.ts"
+import { identify } from "../run-id.ts"
 
 const inputLabels: Record<Input, string> = {
   url: "URL of the running app",
@@ -79,7 +79,7 @@ export async function newConfig(options: { out?: string; from?: string }) {
     rep: Number(rep),
   }
   const config = valid(schema.safeParse(draft), "wizard answers")
-  const id = runId(config, app)
+  const { id } = await identify(config, app)
   const out = options.out ?? `${id}.json`
   await writeFile(out, `${JSON.stringify(config, null, 2)}\n`)
   outro(`Wrote ${out}\nrun_id ${id}`)

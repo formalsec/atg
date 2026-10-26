@@ -2,7 +2,7 @@ import * as z from "zod"
 import { type App, findApp, loadApps } from "../apps.ts"
 import { type Config, configSchema } from "../config.ts"
 import { readJson } from "../json.ts"
-import { runId } from "../run-id.ts"
+import { identify } from "../run-id.ts"
 
 type Result =
   | { file: string; valid: true; run_id: string; config: Config }
@@ -20,7 +20,8 @@ async function check(file: string, apps: App[]): Promise<Result> {
   try {
     const result = configSchema(apps).safeParse(await readJson(file))
     if (!result.success) return { file, valid: false, error: z.prettifyError(result.error) }
-    return { file, valid: true, run_id: runId(result.data, findApp(apps, result.data.app)), config: result.data }
+    const { id } = await identify(result.data, findApp(apps, result.data.app))
+    return { file, valid: true, run_id: id, config: result.data }
   } catch (error) {
     return { file, valid: false, error: error instanceof Error ? error.message : String(error) }
   }
