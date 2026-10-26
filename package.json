@@ -1,0 +1,27 @@
+{
+  "name": "atg",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agentic test generation: benchmark coding agents that write E2E suites",
+  "type": "module",
+  "bin": {
+    "atg": "./src/cli.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1",
+    "commander": "^15.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "ajv": "^8.20.0",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "demo-blog",
+  "url": "https://blog.example.com",
+  "stories_file": "stories.md",
+  "examples_dir": "examples",
+  "fixed_ref": "v2.3.0",
+  "buggy_ref": "v2.3.0-buggy"
+}

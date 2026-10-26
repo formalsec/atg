@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Todos</title>
+  </head>
+  <body>
+    <input id="new-todo" placeholder="What needs to be done?" />
+    <ul id="todos"></ul>
+    <p id="left">0 left</p>
+    <script>
+      const input = document.querySelector("#new-todo")
+      const list = document.querySelector("#todos")
+      const left = document.querySelector("#left")
+      const refresh = () => (left.textContent = `${list.querySelectorAll("input:not(:checked)").length} left`)
+      input.addEventListener("keydown", event => {
+        if (event.key !== "Enter" || !input.value) return
+        const item = document.createElement("li")
+        item.innerHTML = `<label><input type="checkbox" /> ${input.value}</label>`
+        item.querySelector("input").addEventListener("change", refresh)
+        list.append(item)
+        input.value = ""
+        refresh()
+      })
+    </script>
+  </body>
+</html>
