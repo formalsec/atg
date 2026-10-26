@@ -12,7 +12,7 @@ import { agentInvocation, commandLine, generate } from "../stages/generate.ts"
 import { prepare } from "../stages/prepare.ts"
 import { evaluationStages, printMetrics, runEvaluation } from "./eval.ts"
 
-type Options = { dryRun?: boolean; force?: boolean; runsDir: string; keepWorkspace?: boolean }
+type Options = { dryRun?: boolean; force?: boolean; runsDir: string; keepWorkspace?: boolean; reruns: number }
 
 export async function run(file: string, options: Options) {
   const apps = await loadApps()
@@ -42,7 +42,7 @@ export async function run(file: string, options: Options) {
   }
   try {
     const generated = !prepareError && (await runStage(runDir, "generate", () => generate(runDir))) === undefined
-    if (generated) await runEvaluation(runDir, Object.keys(evaluationStages))
+    if (generated) await runEvaluation(runDir, Object.keys(evaluationStages), options.reruns)
   } finally {
     if (!options.keepWorkspace) removeWorkspace(runDir)
   }

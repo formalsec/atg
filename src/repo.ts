@@ -16,6 +16,10 @@ export function resolveVersions(app: App): Promise<Versions> {
   }))
 }
 
+export function resolveRefs(app: App, refs: string[]) {
+  return withClone(app, clone => Promise.all(refs.map(ref => resolveRef(app, clone, ref))))
+}
+
 export function exportVersion(app: App, sha: string, dest: string, path = ".") {
   const tree = posix.normalize(path) === "." ? sha : `${sha}:${path}`
   return withClone(app, async clone => {

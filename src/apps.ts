@@ -6,9 +6,11 @@ import { readJson } from "./json.ts"
 export const inputs = ["url", "task", "examples", "code"] as const
 export type Input = (typeof inputs)[number]
 
+const kebabCase = z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "use lowercase kebab-case")
+
 export const appSchema = z
   .strictObject({
-    id: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "use lowercase kebab-case"),
+    id: kebabCase,
     repo: z.string().min(1),
     url: z.url().optional(),
     start: z.string().min(1).optional(),
@@ -18,6 +20,11 @@ export const appSchema = z
     examples_dir: z.string().min(1).optional(),
     fixed_ref: z.string().min(1),
     buggy_ref: z.string().min(1),
+    bugs: z
+      .array(z.strictObject({ id: kebabCase, ref: z.string().min(1), description: z.string().min(1) }))
+      .min(1)
+      .refine(bugs => new Set(bugs.map(bug => bug.id)).size === bugs.length, "bug ids must be unique")
+      .optional(),
   })
   .refine(app => app.url !== undefined || app.start !== undefined, "needs a url or a start command")
 

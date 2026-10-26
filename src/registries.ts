@@ -51,8 +51,7 @@ export type AgentAdapter = {
 export const suiteResultSchema = z.object({
   tests: z.array(
     z.object({
-      title: z.string(),
-      file: z.string(),
+      key: z.string(),
       status: z.enum(["passed", "failed", "flaky", "skipped"]),
       duration_ms: z.number(),
       error: z.string().optional(),
@@ -72,6 +71,7 @@ export type SuiteRun = {
   logFile: string
   timeoutMs: number
   collectors: Collector[]
+  only?: string[]
 }
 
 export type FrameworkAdapter = {

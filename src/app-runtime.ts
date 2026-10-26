@@ -6,6 +6,7 @@ import { exportVersion } from "./repo.ts"
 import { tempDir } from "./temp.ts"
 
 const startLimitMs = 120_000
+const stopLimitMs = 30_000
 
 export async function startApp(app: App, sha: string, logFile: string) {
   const { url, start } = app
@@ -24,6 +25,8 @@ export async function startApp(app: App, sha: string, logFile: string) {
   const proc = launch("sh", ["-c", start], { cwd: dir, env: process.env, stdout: logFile, stderr: logFile })
   const stop = async () => {
     proc.kill()
+    await proc.exit
+    await waitUntilSilent(url)
     await removeDir()
   }
   try {
@@ -44,6 +47,14 @@ async function waitUntilAnswers(url: string, exit: Promise<Exit>) {
     if (exited) throw new Error(`the start command exited with code ${exited.code} before ${url} answered`)
     if (Date.now() > giveUpAt) throw new Error(`${url} did not answer within ${startLimitMs / 1000}s`)
     await sleep(200)
+  }
+}
+
+async function waitUntilSilent(url: string) {
+  const giveUpAt = Date.now() + stopLimitMs
+  while (await answers(url)) {
+    if (Date.now() > giveUpAt) throw new Error(`${url} still answers ${stopLimitMs / 1000}s after the app was stopped`)
+    await sleep(100)
   }
 }
 

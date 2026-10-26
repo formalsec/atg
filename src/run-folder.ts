@@ -26,7 +26,7 @@ export const runFiles = {
 const envSchema = z.object({
   started_at: z.string(),
   workspace: z.string(),
-  app: z.object({ fixed: z.object({ sha: z.string() }) }),
+  app: z.object({ fixed: z.object({ sha: z.string() }), buggy: z.object({ sha: z.string() }) }),
 })
 
 export const stagesSchema = z.record(z.string(), z.object({ ms: z.number(), error: z.string().optional() }))

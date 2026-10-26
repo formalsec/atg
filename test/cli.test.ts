@@ -296,7 +296,8 @@ describe("help", () => {
       schema: ["--out <file>"],
       apps: ["--json"],
       new: ["--out <file>", "--from <config>"],
-      run: ["--dry-run", "--force", "--runs-dir <dir>", "--keep-workspace"],
+      run: ["--dry-run", "--force", "--runs-dir <dir>", "--keep-workspace", "--reruns <n>"],
+      eval: ["--only <stage>", "--reruns <n>", "--runs-dir <dir>"],
       doctor: [],
     }
     for (const [command, expected] of Object.entries(flags)) {

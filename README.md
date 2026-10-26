@@ -2,7 +2,7 @@
 
 Agentic test generation. atg benchmarks coding agents (Claude Code, Codex CLI, Gemini CLI) that write E2E test suites (Playwright, Selenium, Cypress) for web apps.
 
-This step runs one config end to end, for Claude Code and Playwright: it gives the agent a workspace, lets it write a suite, runs that suite on the fixed version of the app, and measures its browser-side line coverage. Bug finding comes in a later step.
+This step runs one config end to end, for Claude Code and Playwright: it gives the agent a workspace, lets it write a suite, runs that suite several times on the fixed and the buggy version of the app, decides for each test if it finds the bug, and measures the suite's browser-side line coverage.
 
 ## Setup
 
@@ -25,8 +25,8 @@ node src/cli.ts doctor
 | `atg schema [--out <file>]` | Prints the config JSON Schema. |
 | `atg apps [--json]` | Lists the apps and the inputs each app provides. |
 | `atg new [--out <file>] [--from <config>]` | Creates a config with an interactive wizard. `--from` prefills the answers from a config. Without `--out`, the file is `<run_id>.json`. Ctrl+C writes nothing. |
-| `atg run <config> [--dry-run] [--force] [--runs-dir <dir>] [--keep-workspace]` | Runs one config into the run folder `<runs-dir>/<run_id>/` (default `runs/`). See [Runs](#runs). |
-| `atg eval <run_id> [--only evaluate\|coverage] [--runs-dir <dir>]` | Runs the evaluation stages of a finished run again from its saved `tests/`, without the agent, and writes `metrics.json` again. `--only` runs one stage. |
+| `atg run <config> [--dry-run] [--force] [--runs-dir <dir>] [--keep-workspace] [--reruns <n>]` | Runs one config into the run folder `<runs-dir>/<run_id>/` (default `runs/`). `--reruns` sets R, the repetitions per version (default 3). See [Runs](#runs) and [Bug finding](#bug-finding). |
+| `atg eval <run_id> [--only fixed\|buggy\|bugs\|coverage] [--reruns <n>] [--runs-dir <dir>]` | Runs the evaluation stages of a finished run again from its saved `tests/`, without the agent, and writes `metrics.json` again. `--only` runs one stage. `--reruns` sets R (default 3). |
 | `atg pilot <run_id> [--concurrency <n>] [--runs-dir <dir>]` | Prints the cost pilot report of one run. See [Cost pilot](#cost-pilot). |
 | `atg signal <run_dir>` | Runs the workspace tests of a run in progress on the running fixed app and prints the coverage signal. The agent calls it through `./coverage`. See [Coverage signal](#coverage-signal). |
 | `atg doctor` | Checks the agent CLI and its isolation mode (API key or subscription login), Playwright and its Chromium build, and the app start commands. Exits with 1 if a check fails. |
@@ -83,28 +83,31 @@ Each app has a folder `apps/<id>/` with an `app.json`. The `id` must be the fold
 | `examples_dir` | `examples` |
 | `code_dir`: folder inside `repo`, `.` for the whole commit | `code` |
 | `browser_dir`: folder inside `repo` that the app serves at the root of `url` | |
+| `bugs`: a list of bugs, each with an `id` (kebab-case, unique), a `ref` in `repo` (the fixed version plus only that bug) and a `description` | |
 
-An app needs `url` or `start`. Other paths are relative to the app folder. Without `browser_dir`, browser-side line coverage is not measured for the app. Two example apps are fixtures for tests and demos: `demo-todo` provides all inputs, `demo-blog` has no code. `demo-todo` has a help page that the demo suites never open, so its script counts as untested. Their fixed and buggy versions are commits in a `repo.bundle`. To change one, clone the bundle, commit, move the tag and run `git bundle create repo.bundle --all`.
+An app needs `url` or `start`. Other paths are relative to the app folder. Without `browser_dir`, browser-side line coverage is not measured for the app. Two example apps are fixtures for tests and demos: `demo-todo` provides all inputs, `demo-blog` has no code. `demo-todo` has a help page that the demo suites never open, so its script counts as untested. Their fixed and buggy versions are commits in a `repo.bundle`. `demo-todo` lists two bugs: `counter` (the left counter also counts the todos that are done) and `help` (every question on the help page shows the first answer). Its `buggy_ref` has both. The demo suites find `counter` and never open the help page, so they miss `help`. To change one, clone the bundle, commit, move the tag and run `git bundle create repo.bundle --all`.
 
 `ATG_APPS_DIR` points atg to another apps folder.
 
 ## Runs
 
-`atg run` turns one config into one run folder. Five stages run in order. Each stage reads only the run folder, so `atg eval` can run an evaluation stage again.
+`atg run` turns one config into one run folder. Seven stages run in order. Each stage reads only the run folder, so `atg eval` can run an evaluation stage again.
 
 | Stage | What it does |
 | --- | --- |
 | prepare | Resolves the refs to commits, creates a new workspace in the system temp folder, writes the selected inputs and a runnable test project into it, and writes the prompt. |
 | generate | Starts the fixed version, calls the agent in the workspace, and copies the agent's `tests/` into the run folder. |
-| evaluate | Starts a new fixed instance and runs the agent's tests on it with an atg-owned config: JSON reporter, 1 worker, 0 retries, base URL from the environment. |
+| fixed | Runs the agent's tests R times on the fixed version, each time on a new instance, with an atg-owned config: JSON reporter, 1 worker, 0 retries, base URL from the environment. It removes the buggy and bugs results, because they depend on the fixed results. |
+| buggy | Reads the saved fixed results and runs the `stable_pass` tests R times on the buggy version. It fails when there are no saved fixed results, or when they come from another R. |
+| bugs | Does what buggy does on the version of each bug in the app's `bugs` list. It does nothing for an app without a list. |
 | coverage | Starts a new fixed instance and runs the agent's tests on it again, with the collectors of every implemented coverage tool. See [Coverage](#coverage). |
-| finalize | Writes `metrics.json`, atomically and last. |
+| finalize | Classifies each test (see [Bug finding](#bug-finding)), writes `results/verdicts.json`, then writes `metrics.json`, atomically and last. |
 
 The workspace gets only the selected inputs: `code/` is a plain export of the fixed commit (no git metadata), `task` and `examples` are copies from the app folder, and `url` is a running fixed instance. The buggy version is never exported during generation. The workspace must be outside your home folder and outside atg, because Claude Code loads `CLAUDE.md` from the working folder and every parent.
 
 atg owns the app: it starts the app from an export of the version under test, waits until `url` answers, and always stops it. Generate starts the app before it calls the agent, also when `url` is not an input, so a broken start command fails before any money is spent. Without the `url` input and with an empty `coverage_signal`, atg stops the app again before the agent starts.
 
-Coverage is collected only in the coverage stage, never in prepare or generate, so the agent stages take the same time with or without measurement. The pass and fail counts come from the evaluate stage, which runs without collectors.
+Coverage is collected only in the coverage stage, never in prepare or generate, so the agent stages take the same time with or without measurement. The verdicts come from the fixed, buggy and bugs stages, which run without collectors.
 
 ### Run folder
 
@@ -115,12 +118,14 @@ Coverage is collected only in the coverage stage, never in prepare or generate, 
 | `agent-stdout.txt`, `agent-stderr.txt` | The agent's raw output. |
 | `agent.json` | The agent result, normalized by its adapter. |
 | `tests/` | The suite the agent left. |
-| `results/fixed.json` | One entry per test on the fixed version (`passed`, `failed`, `flaky`, `skipped`), plus load errors. `fixed-report.json` is the raw report. |
+| `results/fixed/` | `repetitions.json`: for each repetition, its wall time `ms` (app start, suite run and app stop), one entry per test (`key`, and `status`: `passed`, `failed`, `flaky` or `skipped`) and the load errors. `<n>-report.json`, `<n>-run.log` and `<n>-app.log` are the raw report and the logs of repetition n. |
+| `results/buggy/`, `results/bugs/<id>/` | The same for the buggy version and for the version of each bug. `results/bugs/repetitions.json` holds the repetitions of every bug, by id. |
+| `results/verdicts.json` | The verdict of each test on fixed, on buggy and on each bug, and the keys that more than one test has. |
 | `results/coverage/` | The output of each implemented coverage tool in `<tool>/` (for `lines`, the Monocart report `lines/index.html`), `summary.json` with covered, total, pct, report path and what is uncovered per tool, and the logs of the coverage run. |
 | `signal-calls.jsonl` | One line for each time the agent called the signal command. Only when `coverage_signal` is not empty. |
-| `env.json` | atg commit and dirty flag, Node, OS, agent CLI version, requested and resolved models, isolation mode, the exact agent command, framework and browser versions, app SHAs, start and end times. |
+| `env.json` | atg commit and dirty flag, Node, OS, agent CLI version, requested and resolved models, isolation mode, the exact agent command, framework and browser versions, app SHAs, the bug refs and their SHAs (`bugs`), the evaluation protocol version and R (`evaluation`), start and end times. |
 | `stages.json` | Wall time and error of each stage. |
-| `metrics.json` | Status, stop reason, tokens, cost and `cost_source`, turns, models, wall time per stage, `n_tests`, passed/failed/flaky/skipped on fixed, one `coverage` block per coverage tool (`covered`, `total`, `pct`, `report`, or `null` when not measured), and `signal_calls`. |
+| `metrics.json` | Status, stop reason, tokens, cost and `cost_source`, turns, models, wall time per stage (`wall_ms`) and per repetition (`repetition_ms`), `evaluation` (protocol version and R), `n_tests`, `duplicate_keys`, the counts of each verdict on fixed (`fixed`) and on buggy (`buggy`), `caught`, `caught_strict`, `not_caught_reason`, `bugs` (`tested`, `detected`, `detection_rate`, and the buggy verdict counts `by_bug`, or `null` without a bug list), one `coverage` block per coverage tool (`covered`, `total`, `pct`, `report`, or `null` when not measured), and `signal_calls`. A field is `null` when its stage did not give results. |
 
 If `metrics.json` exists, `atg run` does nothing, and `atg eval` can run its evaluation again. `--force` redoes the run. A folder without `metrics.json` (a killed run) is deleted and the run starts again. `--dry-run` stops after prepare, keeps the workspace and prints the agent invocation. The workspace is deleted after generate unless you give `--keep-workspace`.
 
@@ -130,7 +135,7 @@ Each run has one status:
 | --- | --- |
 | `ok` | The run finished. This includes an agent that stopped at `max_turns` or `max_budget_usd`; `stop_reason` keeps why. |
 | `agent_error` | No parseable result, `error_during_execution`, or an auth or CLI failure. |
-| `infra_error` | atg, the app start, the export or the browser failed. Exits with 1. |
+| `infra_error` | atg, the start of any app version, the export or the browser failed, or a suite run wrote no report. Exits with 1. |
 | `timeout` | `timeout_min` passed during prepare or generate. atg kills the agent's whole process tree. |
 
 atg evaluates the tests the agent left for every status except `infra_error`. The evaluation has its own limit of `timeout_min`. Ctrl+C or SIGTERM stops every process that atg started and deletes its temp folders, the workspace too unless you give `--keep-workspace`. After SIGKILL, the app can keep its port, and the next run then fails with `infra_error` until you stop it.
@@ -180,9 +185,56 @@ To plug in a real `html` or `api` tool, give its registry entry an adapter and s
 
 When `coverage_signal` is not empty, prepare writes `./coverage` into the workspace, the prompt tells the agent about it, and the agent may run it. It runs the agent's current tests on the running fixed instance with the collectors of the selected tools only, and prints, for each one, the pct and what is still uncovered. Its output goes to a temp folder that it deletes, so it never changes the evaluation outputs. Each call adds one line to `signal-calls.jsonl`, and `metrics.json` keeps the count in `signal_calls`. When `coverage_signal` is empty, the workspace has no `./coverage` and the prompt does not mention it. The evaluation is the same in both cases.
 
+## Bug finding
+
+The evaluation runs the suite on the fixed version and on the buggy version, and decides for each test if it finds the bug.
+
+### Evaluation protocol
+
+The protocol is a setting of the evaluation, not of the config. `--reruns <n>` on `atg run` and `atg eval` sets R, the number of repetitions for each version (default 3). `metrics.json` and `env.json` record R and the protocol version in `evaluation` (the version is 1). Both stay out of `run_id`, because `run_id` identifies the generated suite. To evaluate a suite again with another R, run `atg eval <run_id> --reruns <n>`. That does not call the agent.
+
+Each repetition is a separate framework run on a new app instance. atg does not use the framework's retries or repeat-each, because they share one app process, so server state leaks from one repetition into the next. To stop an instance, the app runtime waits until its process has exited and its `url` does not answer, so the next instance can start on the same `url`. The repetitions run one after the other.
+
+A test has the same identity in every run when its key is the same. The framework adapter makes the key from the file and the full title path, for example `todo.spec.ts › adds a todo`. The rest of atg sees only the key. When two tests have the same key, atg puts the key in `duplicate_keys` and does not classify those tests.
+
+### Classification
+
+`classify` in `src/classify.ts` gives each test one verdict from its results in the R repetitions. It is a pure function.
+
+| Version | Verdict | When |
+| --- | --- | --- |
+| fixed | `stable_pass` | The test passes in all R repetitions. |
+| fixed | `broken` | The test fails in all R repetitions. |
+| fixed | `skipped` | The test is skipped in all R repetitions. |
+| fixed | `flaky` | Any other mix. A test that is missing from a repetition counts as failed in it. |
+| buggy | `revealing` | A `stable_pass` test fails in all R repetitions. |
+| buggy | `flaky_on_buggy` | A `stable_pass` test fails in some repetitions, but not in all. |
+| buggy | `not_revealing` | A `stable_pass` test fails in no repetition (it passes or is skipped). |
+
+The buggy version runs only the `stable_pass` tests. So a test that is flaky on fixed is never `revealing`.
+
+| Field | Rule |
+| --- | --- |
+| `caught` | At least one test is `revealing`. This is the test-level rule, like the [triggering tests of Defects4J](https://defects4j.org/html_doc/run_bug_detection.html). |
+| `caught_strict` | Every test is `stable_pass` on fixed, no two tests have the same key, and at least one test is `revealing`. This is the whole-suite rule. |
+
+`metrics.json` has both, because the rule for the paper is not decided yet. A suite without a `stable_pass` test is a valid `ok` run: `caught` is false and `not_caught_reason` gives the reason.
+
+### Per-bug attribution
+
+An app can list its bugs in `bugs` in `app.json`. The bugs stage runs the `stable_pass` tests R times on the version of each bug. `bugs.detection_rate` is the number of bugs with at least one `revealing` test, divided by the number of bugs tested. The bugs stage resolves the bug refs to commits and records them in `env.json`, not in `run_id`. The all-bugs version (`buggy_ref`) stays the primary result. The per-bug runs exist because bugs can mask or change each other, so the failures on the all-bugs version cannot be split by bug. For an app without a bug list, `bugs` is `null`.
+
+### Failures and isolation
+
+When the buggy version or the version of a bug does not start, a suite run writes no report, or a selected `stable_pass` test is missing from the report, the stage fails and the run is `infra_error`. The fields of that version are then `null`: such a run is never counted as caught or as not caught. A test cannot tell which version it runs against: every version runs on the same `url` with the same environment variables, and no variable names the version.
+
+### Cost
+
+The evaluation runs the suite about (2 + number of bugs) × R times, plus one coverage run. `wall_ms` keeps the time of each stage, and `repetition_ms` the time of each repetition. The [cost pilot](#cost-pilot) uses them to estimate the evaluation time of the grid for different values of R.
+
 ## Cost pilot
 
-`atg pilot <run_id>` prints a Markdown report of one run folder: wall time per stage, tokens by type, cost and `cost_source`, turns, `n_tests` and pass/fail on fixed, and coverage per tool. It then estimates the full grid of 11,520 runs: total cost, total agent-hours, and calendar time with `--concurrency` runs at a time per agent (default 1). It writes each assumption next to its number: every run costs and takes what this run did, and the 3 agents of the grid run side by side.
+`atg pilot <run_id>` prints a Markdown report of one run folder: wall time per stage, tokens by type, cost and `cost_source`, turns, and coverage per tool. Its bug finding section gives R, the verdict counts on fixed and on buggy, `caught` and `caught_strict`, the per-bug detection, the evaluation time per stage, and the mean time of one repetition of each version. It then estimates the full grid of 11,520 runs: total cost, total agent-hours, evaluation-hours for R = 1, 3 and 5, and calendar time with `--concurrency` runs at a time per agent (default 1). It writes each assumption next to its number: every run costs and takes what this run did, and the 3 agents of the grid run side by side.
 
 The pilot config is `configs/pilot.json`: Claude Code, all four inputs, every implemented tool as signal, Playwright, rep 1, and `max_budget_usd` set.
 
@@ -202,4 +254,4 @@ npm test
 npm run typecheck
 ```
 
-The pipeline tests spend no money: `test/fixtures/fake-agent.ts` registers a fake agent that writes a known suite, calls the signal command, waits, or hangs. `test/fixtures/atg-fake-coverage.ts` also replaces the `html` stub with a fake adapter.
+The pipeline tests spend no money: `test/fixtures/fake-agent.ts` registers a fake agent that writes a known suite, a suite with a flaky test, or a suite with no passing test, calls the signal command, waits, or hangs. `test/fixtures/atg-fake-coverage.ts` also replaces the `html` stub with a fake adapter.

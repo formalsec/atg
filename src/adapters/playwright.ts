@@ -49,7 +49,7 @@ export const playwright: FrameworkAdapter = {
   testDir,
   testCommand: "npx playwright test",
   scaffold: (dir, baseUrl) => project(dir, agentConfig(baseUrl)),
-  async run({ testsDir, baseUrl, reportFile, logFile, timeoutMs, collectors }) {
+  async run({ testsDir, baseUrl, reportFile, logFile, timeoutMs, collectors, only }) {
     const dir = await tempDir("atg-suite-")
     try {
       await project(dir, suiteConfig(reportFile, timeoutMs))
@@ -58,7 +58,10 @@ export const playwright: FrameworkAdapter = {
       if (existsSync(testsDir)) await cp(testsDir, join(dir, testDir), { recursive: true })
       const browser = await browserVersion(dir)
       await rm(reportFile, { force: true })
-      await runWithTimeout(process.execPath, [join(dir, "node_modules", "@playwright", "test", "cli.js"), "test"], {
+      const testList = join(dir, "test-list.txt")
+      if (only) await writeFile(testList, only.map(key => `${key}\n`).join(""))
+      const cli = [join(dir, "node_modules", "@playwright", "test", "cli.js"), "test", ...(only ? ["--test-list", testList] : [])]
+      await runWithTimeout(process.execPath, cli, {
         cwd: dir,
         env: { ...process.env, BASE_URL: baseUrl, ATG_COLLECTORS: JSON.stringify(collectors) },
         stdout: logFile,
@@ -144,8 +147,7 @@ function collect(suite: Suite, titles: string[]): SuiteResult["tests"] {
   return [
     ...suite.specs.flatMap(spec =>
       spec.tests.map(test => ({
-        title: [...titles, spec.title].join(" › "),
-        file: spec.file,
+        key: [...titles, spec.title].join(" › "),
         status: statuses[test.status],
         duration_ms: test.results.reduce((total, result) => total + result.duration, 0),
         error: test.results.flatMap(result => (result.error ? [plain(result.error.message)] : []))[0],

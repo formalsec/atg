@@ -14,7 +14,7 @@ test("adds a todo", async ({ page }) => {
 })
 `
 
-const rest = `
+const countsLeft = `
 test("counts what is left after a todo is done", async ({ page }) => {
   await page.goto("/")
   for (const title of ["Buy milk", "Walk the dog"]) {
@@ -22,12 +22,25 @@ test("counts what is left after a todo is done", async ({ page }) => {
     await page.keyboard.press("Enter")
   }
   await page.getByRole("checkbox").first().check()
-  await expect(page.getByText("1 left")).toBeVisible()
+  await expect(page.getByText("1 left")).toBeVisible({ timeout: 1000 })
 })
+`
 
+const failsOnPurpose = `
 test("fails on purpose", async ({ page }) => {
   await page.goto("/")
   await expect(page.getByText("7 left")).toBeVisible({ timeout: 500 })
+})
+`
+
+const flaky = `
+test("fails on every second run", async ({ page }) => {
+  const { existsSync, readFileSync, writeFileSync } = await import("node:fs")
+  const counter = process.env.FLAKY_COUNTER ?? ""
+  const runs = (existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0) + 1
+  writeFileSync(counter, String(runs))
+  await page.goto("/")
+  expect(runs % 2).toBe(1)
 })
 `
 
@@ -41,8 +54,11 @@ if (mode === "hang") {
   await sleep(600_000)
 }
 
+const suite = header + addsTodo + countsLeft + failsOnPurpose
+const suites: Record<string, string> = { flaky: suite + flaky, broken: header + failsOnPurpose }
+
 if (mode === "signal") {
-  await writeFile("tests/todo.spec.ts", header + addsTodo + rest)
+  await writeFile("tests/todo.spec.ts", suite)
   console.log(execFileSync("./coverage", { encoding: "utf8" }))
 }
 
@@ -51,5 +67,5 @@ if (mode === "slow") {
   await sleep(3000)
 }
 
-await writeFile("tests/todo.spec.ts", header + addsTodo + rest)
+await writeFile("tests/todo.spec.ts", suites[mode] ?? suite)
 console.log("suite written")

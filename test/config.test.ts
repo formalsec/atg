@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, test } from "node:test"
 import * as z from "zod"
-import { findApp, loadApps } from "../src/apps.ts"
+import { appSchema, findApp, loadApps } from "../src/apps.ts"
 import { configSchema } from "../src/config.ts"
 import { resolveVersions } from "../src/repo.ts"
 import { identify, runId } from "../src/run-id.ts"
@@ -74,6 +74,18 @@ describe("config schema", () => {
   })
 })
 
+describe("app schema", () => {
+  test("accepts a bug list with unique kebab-case ids, and rejects others", () => {
+    const app = { id: "app", repo: "repo.bundle", url: "http://localhost:4173", fixed_ref: "a", buggy_ref: "b" }
+    const bug = { id: "counter", ref: "c", description: "The counter is wrong." }
+    const issues = (data: unknown) => appSchema.safeParse(data).error?.issues.map(issue => issue.message) ?? []
+    assert.deepEqual(issues({ ...app, bugs: [bug] }), [])
+    assert.deepEqual(issues({ ...app, bugs: [{ ...bug, id: "../escape" }] }), ["use lowercase kebab-case"])
+    assert.deepEqual(issues({ ...app, bugs: [bug, bug] }), ["bug ids must be unique"])
+    assert.deepEqual(issues({ ...app, bugs: [] }), ["Too small: expected array to have >=1 items"])
+  })
+})
+
 describe("run_id", () => {
   const id = idOf(base)
 
@@ -120,7 +132,7 @@ describe("run_id", () => {
   test("resolves the demo app refs to the commits in its bundle", async () => {
     assert.deepEqual(await resolveVersions(findApp(apps, "demo-todo")), {
       fixed: "f61478d89c5fb5b07dc13f560690166b2c51b387",
-      buggy: "b093525ac628b7701a402bb664306f553fbd1c2c",
+      buggy: "d4e812811cb1f4e053355079d4e241541abadce5",
     })
   })
 

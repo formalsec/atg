@@ -9,6 +9,7 @@ import { run } from "./commands/run.ts"
 import { schema } from "./commands/schema.ts"
 import { signal } from "./commands/signal.ts"
 import { validate } from "./commands/validate.ts"
+import { defaultReruns } from "./stages/evaluate.ts"
 
 const program = new Command("atg").description("Benchmark coding agents that generate E2E test suites")
 
@@ -46,6 +47,7 @@ program
   .option("--force", "redo the run even when it is done")
   .option("--runs-dir <dir>", "folder that holds the run folders", "runs")
   .option("--keep-workspace", "keep the agent workspace after the run")
+  .option("--reruns <n>", "times the suite runs on each version, each on a fresh app instance", wholeAboveZero, defaultReruns)
   .action(run)
 
 program
@@ -53,6 +55,7 @@ program
   .description("Evaluate a finished run again from its saved tests, without calling the agent, and rewrite metrics.json")
   .argument("<run_id>", "run to evaluate")
   .addOption(new Option("--only <stage>", "run only this evaluation stage").choices(Object.keys(evaluationStages)))
+  .option("--reruns <n>", "times the suite runs on each version, each on a fresh app instance", wholeAboveZero, defaultReruns)
   .option("--runs-dir <dir>", "folder that holds the run folders", "runs")
   .action(evaluateRun)
 
