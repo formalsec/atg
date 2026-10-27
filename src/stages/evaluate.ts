@@ -86,12 +86,12 @@ async function repeat(runDir: string, { config, app }: Run, { sha, dir, reruns, 
         logFile: join(dir, `${n}-run.log`),
         timeoutMs: config.timeout_min * 60_000,
         collectors: [],
-        only,
       })
       .finally(instance.stop)
-    const missing = only?.filter(key => !result.tests.some(test => test.key === key)) ?? []
+    const tests = only ? result.tests.filter(test => only.includes(test.key)) : result.tests
+    const missing = only?.filter(key => !tests.some(test => test.key === key)) ?? []
     if (missing.length > 0) throw new Error(`the suite run did not report the selected tests: ${missing.join(", ")}`)
-    repetitions.push({ ms: Math.round(performance.now() - started), tests: result.tests, errors: result.errors })
+    repetitions.push({ ms: Math.round(performance.now() - started), tests, errors: result.errors })
     versions = result.versions
   }
   return { repetitions, versions }

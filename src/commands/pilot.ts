@@ -97,7 +97,7 @@ export async function pilot(runId: string, options: { runsDir: string; concurren
       `| Total cost | ${metrics.cost_usd === null ? "unknown" : usd(metrics.cost_usd * grid.runs)} | Every run costs what this run cost: ${cost}. |`,
       `| Agent-hours | ${hours(generateMs * grid.runs)} | Every agent stage takes what this run's generate stage took: ${duration(generateMs)}. |`,
       `| Evaluation-hours | ${evaluationHours.join(", ")} | Every evaluation takes this run's evaluation time outside the repetitions, ${duration(outsideMs)}, plus R times one repetition of every version, ${duration(repetitionMs)}. |`,
-      `| Calendar time | ${duration((runsPerAgent * totalMs) / options.concurrency)} | The ${grid.agents} agents run side by side, each does ${count(runsPerAgent)} runs with ${options.concurrency} at a time, and every run takes this run's total wall time: ${duration(totalMs)}. |`,
+      `| Calendar time | ${duration((runsPerAgent * totalMs) / options.concurrency)} | The ${grid.agents} agents run side by side, each does ${count(runsPerAgent)} runs with ${options.concurrency} at a time, and every run takes this run's total wall time: ${duration(totalMs)}. Runs whose apps share a url wait for each other, so the runs at the same time must use apps with different urls. |`,
     ].join("\n"),
   )
 }

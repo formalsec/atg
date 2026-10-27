@@ -71,7 +71,6 @@ export type SuiteRun = {
   logFile: string
   timeoutMs: number
   collectors: Collector[]
-  only?: string[]
 }
 
 export type FrameworkAdapter = {

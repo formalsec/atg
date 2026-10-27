@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs"
 import { mkdir, rm } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import * as z from "zod"
+import { holdUrl } from "../app-runtime.ts"
 import { findApp, loadApps } from "../apps.ts"
-import { configSchema } from "../config.ts"
+import { parseConfig } from "../config.ts"
 import { readJson } from "../json.ts"
 import { identify } from "../run-id.ts"
 import { removeWorkspace, runFiles, runStage, stopOnSignals } from "../run-folder.ts"
@@ -16,9 +16,7 @@ type Options = { dryRun?: boolean; force?: boolean; runsDir: string; keepWorkspa
 
 export async function run(file: string, options: Options) {
   const apps = await loadApps()
-  const parsed = configSchema(apps).safeParse(await readJson(file))
-  if (!parsed.success) throw new Error(`${file} is not a valid config\n${z.prettifyError(parsed.error)}`)
-  const config = parsed.data
+  const config = parseConfig(apps, await readJson(file), file)
   const app = findApp(apps, config.app)
   const { id, versions } = await identify(config, app)
   const runDir = resolve(options.runsDir, id)
@@ -26,6 +24,7 @@ export async function run(file: string, options: Options) {
     console.log(`run_id ${id} is done, nothing to do (--force redoes it)\n${runDir}`)
     return
   }
+  const release = options.dryRun ? async () => {} : await holdUrl(app.url)
   await rm(runDir, { recursive: true, force: true })
   await mkdir(runDir, { recursive: true })
   stopOnSignals(runDir, options.keepWorkspace)
@@ -44,6 +43,7 @@ export async function run(file: string, options: Options) {
     const generated = !prepareError && (await runStage(runDir, "generate", () => generate(runDir))) === undefined
     if (generated) await runEvaluation(runDir, Object.keys(evaluationStages), options.reruns)
   } finally {
+    await release()
     if (!options.keepWorkspace) removeWorkspace(runDir)
   }
   const metrics = await finalize(runDir)

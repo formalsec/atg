@@ -5,6 +5,8 @@ import { join } from "node:path"
 
 const dirs = new Set<string>()
 
+process.once("exit", removeTempDirs)
+
 export async function tempDir(prefix: string) {
   const dir = await mkdtemp(join(tmpdir(), prefix))
   dirs.add(dir)

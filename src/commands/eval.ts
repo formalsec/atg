@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { runFiles, runStage, stopOnSignals } from "../run-folder.ts"
+import { holdUrl } from "../app-runtime.ts"
+import { readJson } from "../json.ts"
+import { readRun, runFiles, runStage, stagesSchema, stopOnSignals } from "../run-folder.ts"
 import { coverage } from "../stages/coverage.ts"
 import { bugs, buggy, fixed } from "../stages/evaluate.ts"
 import { finalize, type Metrics } from "../stages/finalize.ts"
@@ -16,9 +18,18 @@ type Options = { only?: string; reruns: number; runsDir: string }
 
 export async function evaluateRun(runId: string, options: Options) {
   const runDir = resolve(options.runsDir, runId)
-  if (!existsSync(join(runDir, runFiles.metrics))) throw new Error(`run ${runId} is not finished: ${runDir} has no metrics.json`)
+  const stages = join(runDir, runFiles.stages)
+  const generated = existsSync(stages) ? stagesSchema.parse(await readJson(stages)).generate : undefined
+  if (!generated || generated.error !== undefined) {
+    throw new Error(`run ${runId} has no suite to evaluate: its generate stage did not finish in ${runDir}`)
+  }
   stopOnSignals(runDir, true)
-  await runEvaluation(runDir, options.only ? [options.only] : Object.keys(evaluationStages), options.reruns)
+  const release = await holdUrl((await readRun(runDir)).app.url)
+  try {
+    await runEvaluation(runDir, options.only ? [options.only] : Object.keys(evaluationStages), options.reruns)
+  } finally {
+    await release()
+  }
   const metrics = await finalize(runDir)
   printMetrics(runId, runDir, metrics)
   if (metrics.status === "infra_error") process.exitCode = 1

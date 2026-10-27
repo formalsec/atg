@@ -6,7 +6,7 @@ import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import * as z from "zod"
 import { check } from "../check.ts"
-import { runWithTimeout } from "../process.ts"
+import { cleanEnv, runWithTimeout } from "../process.ts"
 import type { FrameworkAdapter, SuiteResult } from "../registries.ts"
 import { tempDir } from "../temp.ts"
 
@@ -15,6 +15,8 @@ const require = createRequire(import.meta.url)
 const packages = ["@playwright/test", "playwright", "playwright-core"]
 const testDir = "tests"
 const killGraceMs = 60_000
+
+let chromium: Promise<string> | undefined
 
 const testSchema = z.object({
   status: z.enum(["expected", "unexpected", "flaky", "skipped"]),
@@ -49,21 +51,18 @@ export const playwright: FrameworkAdapter = {
   testDir,
   testCommand: "npx playwright test",
   scaffold: (dir, baseUrl) => project(dir, agentConfig(baseUrl)),
-  async run({ testsDir, baseUrl, reportFile, logFile, timeoutMs, collectors, only }) {
+  async run({ testsDir, baseUrl, reportFile, logFile, timeoutMs, collectors }) {
     const dir = await tempDir("atg-suite-")
     try {
       await project(dir, suiteConfig(reportFile, timeoutMs))
       await writeFile(join(dir, "node_modules", "@playwright", "test", "index.js"), fixture)
       await writeFile(join(dir, "node_modules", "@playwright", "test", "index.mjs"), fixtureModule)
       if (existsSync(testsDir)) await cp(testsDir, join(dir, testDir), { recursive: true })
-      const browser = await browserVersion(dir)
+      const browser = await browserVersion()
       await rm(reportFile, { force: true })
-      const testList = join(dir, "test-list.txt")
-      if (only) await writeFile(testList, only.map(key => `${key}\n`).join(""))
-      const cli = [join(dir, "node_modules", "@playwright", "test", "cli.js"), "test", ...(only ? ["--test-list", testList] : [])]
-      await runWithTimeout(process.execPath, cli, {
+      await runWithTimeout(process.execPath, [join(dir, "node_modules", "@playwright", "test", "cli.js"), "test"], {
         cwd: dir,
-        env: { ...process.env, BASE_URL: baseUrl, ATG_COLLECTORS: JSON.stringify(collectors) },
+        env: { ...cleanEnv(["PLAYWRIGHT_BROWSERS_PATH"]), BASE_URL: baseUrl, ATG_COLLECTORS: JSON.stringify(collectors) },
         stdout: logFile,
         stderr: logFile,
         timeoutMs: timeoutMs + killGraceMs,
@@ -82,7 +81,7 @@ export const playwright: FrameworkAdapter = {
   async checks() {
     return [
       await check("Playwright", async () => version()),
-      await check("Chromium", () => browserVersion(import.meta.dirname)),
+      await check("Chromium", browserVersion),
     ]
   },
 }
@@ -165,11 +164,13 @@ function version() {
   return z.object({ version: z.string() }).parse(require("@playwright/test/package.json")).version
 }
 
-async function browserVersion(cwd: string) {
+function browserVersion() {
   const launch = `import { chromium } from "playwright"
 const browser = await chromium.launch()
 console.log(browser.version())
 await browser.close()`
-  const { stdout } = await exec(process.execPath, ["--input-type=module", "-e", launch], { cwd })
-  return stdout.trim()
+  chromium ??= exec(process.execPath, ["--input-type=module", "-e", launch], { cwd: import.meta.dirname }).then(({ stdout }) =>
+    stdout.trim(),
+  )
+  return chromium
 }

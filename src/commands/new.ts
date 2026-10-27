@@ -1,8 +1,7 @@
 import { type CANCEL_SYMBOL, cancel, intro, isCancel, multiselect, outro, select, text } from "@clack/prompts"
 import { writeFile } from "node:fs/promises"
-import * as z from "zod"
 import { findApp, type Input, inputs, loadApps, providedInputs } from "../apps.ts"
-import { configSchema, defaults } from "../config.ts"
+import { defaults, parseConfig } from "../config.ts"
 import { readJson } from "../json.ts"
 import { agents, coverageTools, type Descriptor, frameworks } from "../registries.ts"
 import { identify } from "../run-id.ts"
@@ -16,8 +15,7 @@ const inputLabels: Record<Input, string> = {
 
 export async function newConfig(options: { out?: string; from?: string }) {
   const apps = await loadApps()
-  const schema = configSchema(apps)
-  const from = options.from === undefined ? undefined : valid(schema.safeParse(await readJson(options.from)), options.from)
+  const from = options.from === undefined ? undefined : parseConfig(apps, await readJson(options.from), options.from)
 
   intro("atg new")
   const appId = answer(
@@ -62,7 +60,7 @@ export async function newConfig(options: { out?: string; from?: string }) {
     }),
   )
   const timeout = await ask("Timeout in minutes", String(from?.timeout_min ?? defaults.timeout_min), value =>
-    isWholeAboveZero(value) ? undefined : "timeout_min must be a whole number above 0",
+    isAmountAboveZero(value) ? undefined : "timeout_min must be a number above 0",
   )
   const rep = await ask("Repetition", String(from?.rep ?? defaults.rep), value =>
     isWholeAboveZero(value) ? undefined : "rep must be a whole number above 0",
@@ -83,7 +81,7 @@ export async function newConfig(options: { out?: string; from?: string }) {
     timeout_min: Number(timeout),
     rep: Number(rep),
   }
-  const config = valid(schema.safeParse(draft), "wizard answers")
+  const config = parseConfig(apps, draft, "wizard answers")
   const { id } = await identify(config, app)
   const out = options.out ?? `${id}.json`
   await writeFile(out, `${JSON.stringify(config, null, 2)}\n`)
@@ -122,15 +120,10 @@ async function ask(message: string, fallback: string | undefined, check: (value:
   )
 }
 
-function isWholeAboveZero(value: string) {
+export function isWholeAboveZero(value: string) {
   return /^[1-9]\d*$/.test(value)
 }
 
 function isAmountAboveZero(value: string) {
   return Number.isFinite(Number(value)) && Number(value) > 0
-}
-
-function valid<T>(result: z.ZodSafeParseResult<T>, source: string) {
-  if (!result.success) throw new Error(`${source} is not a valid config\n${z.prettifyError(result.error)}`)
-  return result.data
 }

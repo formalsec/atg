@@ -4,11 +4,9 @@ import { join } from "node:path"
 import { startApp } from "../app-runtime.ts"
 import { signalCommand } from "../commands/signal.ts"
 import { writeJson } from "../json.ts"
-import { quote, runWithTimeout } from "../process.ts"
+import { cleanEnv, quote, runWithTimeout } from "../process.ts"
 import { agentEntry, type AgentResult, frameworkEntry, type Invocation } from "../registries.ts"
 import { mergeEnv, readRun, runFiles } from "../run-folder.ts"
-
-const passedEnv = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM"]
 
 export async function agentInvocation(runDir: string) {
   const { config, env, deadline } = await readRun(runDir)
@@ -23,12 +21,7 @@ export async function agentInvocation(runDir: string) {
       ...(config.coverage_signal.length > 0 ? [signalCommand] : []),
     ],
   })
-  const baseEnv: Record<string, string> = {}
-  for (const name of passedEnv) {
-    const value = process.env[name]
-    if (value !== undefined) baseEnv[name] = value
-  }
-  return { ...invocation, env: { ...baseEnv, ...invocation.env }, cwd: env.workspace, prompt }
+  return { ...invocation, env: { ...cleanEnv(), ...invocation.env }, cwd: env.workspace, prompt }
 }
 
 export function commandLine(invocation: Invocation & { cwd: string }, promptFile: string) {
@@ -42,7 +35,7 @@ export async function generate(runDir: string) {
   const agent = agentEntry(config.agent.name).adapter
   const invocation = await agentInvocation(runDir)
   const instance = await startApp(app, env.app.fixed.sha, join(runDir, "app-generate.log"))
-  if (!config.inputs.includes("url") && config.coverage_signal.length === 0) await instance.stop()
+  if (!config.inputs.includes("url")) await instance.stop()
   try {
     const stdout = join(runDir, runFiles.agentStdout)
     const stderr = join(runDir, runFiles.agentStderr)

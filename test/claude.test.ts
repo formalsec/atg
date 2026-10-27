@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { claude } from "../src/adapters/claude.ts"
+import { commandLine } from "../src/stages/generate.ts"
 
 const input = {
   workspace: "/w",
@@ -78,6 +79,13 @@ describe("claude adapter invocation", () => {
     assert.deepEqual(env, { ANTHROPIC_API_KEY: "sk-test" })
     assert.ok(args.includes("--bare"))
     assert.equal(args.includes("--setting-sources"), false)
+  })
+
+  test("with an API key, the saved command names the key and never shows its value", () => {
+    const invocation = withApiKey("sk-test-secret", () => claude.invocation(input))
+    const line = commandLine({ ...invocation, cwd: "/w" }, "/run/prompt.md")
+    assert.ok(line.includes(`ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"`), line)
+    assert.equal(line.includes("sk-test-secret"), false, line)
   })
 
   test("leaves out limits that are not set", () => {
