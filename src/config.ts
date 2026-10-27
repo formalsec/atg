@@ -63,3 +63,9 @@ export function configSchema(apps: App[]) {
 }
 
 export type Config = z.output<ReturnType<typeof configSchema>>
+
+export function parseConfig(apps: App[], data: unknown, source: string) {
+  const result = configSchema(apps).safeParse(data)
+  if (!result.success) throw new Error(`${source} is not a valid config\n${z.prettifyError(result.error)}`)
+  return result.data
+}

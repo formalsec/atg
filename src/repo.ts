@@ -1,33 +1,38 @@
 import { execFile } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { mkdir, rm } from "node:fs/promises"
-import { join, posix } from "node:path"
+import { join, posix, resolve } from "node:path"
 import { promisify } from "node:util"
 import { type App, appDir } from "./apps.ts"
 import { tempDir } from "./temp.ts"
 
 const exec = promisify(execFile)
 
+const clones = new Map<string, string>()
+
 export type Versions = { fixed: string; buggy: string }
 
-export function resolveVersions(app: App): Promise<Versions> {
-  return withClone(app, async clone => ({
-    fixed: await resolveRef(app, clone, app.fixed_ref),
-    buggy: await resolveRef(app, clone, app.buggy_ref),
-  }))
+export async function resolveVersions(app: App): Promise<Versions> {
+  const clone = await freshClone(app)
+  return { fixed: await resolveRef(app, clone, app.fixed_ref), buggy: await resolveRef(app, clone, app.buggy_ref) }
 }
 
-export function resolveRefs(app: App, refs: string[]) {
-  return withClone(app, clone => Promise.all(refs.map(ref => resolveRef(app, clone, ref))))
+export async function resolveRefs(app: App, refs: string[]) {
+  const clone = await freshClone(app)
+  return Promise.all(refs.map(ref => resolveRef(app, clone, ref)))
 }
 
-export function exportVersion(app: App, sha: string, dest: string, path = ".") {
+export async function exportVersion(app: App, sha: string, dest: string, path = ".") {
   const tree = posix.normalize(path) === "." ? sha : `${sha}:${path}`
-  return withClone(app, async clone => {
-    const archive = join(clone, "export.tar")
+  const clone = clones.get(cloneKey(app)) ?? (await freshClone(app))
+  const archive = join(clone, `${randomUUID()}.tar`)
+  try {
     await exec("git", ["-C", clone, "archive", "--format=tar", "--output", archive, tree])
     await mkdir(dest, { recursive: true })
     await exec("tar", ["-xf", archive, "-C", dest])
-  })
+  } finally {
+    await rm(archive, { force: true })
+  }
 }
 
 async function resolveRef(app: App, clone: string, ref: string) {
@@ -39,12 +44,13 @@ async function resolveRef(app: App, clone: string, ref: string) {
   }
 }
 
-async function withClone<T>(app: App, use: (clone: string) => Promise<T>) {
+async function freshClone(app: App) {
   const clone = await tempDir("atg-repo-")
-  try {
-    await exec("git", ["clone", "--quiet", "--bare", "--", app.repo, clone], { cwd: appDir(app) })
-    return await use(clone)
-  } finally {
-    await rm(clone, { recursive: true, force: true })
-  }
+  await exec("git", ["clone", "--quiet", "--bare", "--", app.repo, clone], { cwd: appDir(app) })
+  clones.set(cloneKey(app), clone)
+  return clone
+}
+
+function cloneKey(app: App) {
+  return resolve(appDir(app), app.repo)
 }

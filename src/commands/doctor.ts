@@ -11,9 +11,7 @@ export async function doctor() {
   const apps = await loadApps()
   const checks = [
     ...(await Promise.all(adapters.map(adapter => adapter.checks()))).flat(),
-    ...(await Promise.all(
-      apps.flatMap(app => (app.start ? [check(`${app.id} start command`, () => onPath(app.start ?? ""))] : [])),
-    )),
+    ...(await Promise.all(apps.map(app => check(`${app.id} start command`, () => onPath(app.start))))),
   ]
   for (const result of checks) console.log(`${result.ok ? "✔" : "✖"} ${result.name}: ${result.detail}`)
   if (checks.some(result => !result.ok)) process.exitCode = 1

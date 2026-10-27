@@ -75,14 +75,21 @@ describe("config schema", () => {
 })
 
 describe("app schema", () => {
+  const app = { id: "app", repo: "repo.bundle", url: "http://localhost:4173", start: "node server.mjs", fixed_ref: "a", buggy_ref: "b" }
+
   test("accepts a bug list with unique kebab-case ids, and rejects others", () => {
-    const app = { id: "app", repo: "repo.bundle", url: "http://localhost:4173", fixed_ref: "a", buggy_ref: "b" }
     const bug = { id: "counter", ref: "c", description: "The counter is wrong." }
     const issues = (data: unknown) => appSchema.safeParse(data).error?.issues.map(issue => issue.message) ?? []
     assert.deepEqual(issues({ ...app, bugs: [bug] }), [])
     assert.deepEqual(issues({ ...app, bugs: [{ ...bug, id: "../escape" }] }), ["use lowercase kebab-case"])
     assert.deepEqual(issues({ ...app, bugs: [bug, bug] }), ["bug ids must be unique"])
     assert.deepEqual(issues({ ...app, bugs: [] }), ["Too small: expected array to have >=1 items"])
+  })
+
+  test("needs both a url and a start command, so atg starts every version itself", () => {
+    assert.ok(appSchema.safeParse(app).success)
+    assert.equal(appSchema.safeParse({ ...app, start: undefined }).success, false)
+    assert.equal(appSchema.safeParse({ ...app, url: undefined }).success, false)
   })
 })
 

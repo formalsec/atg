@@ -1,7 +1,8 @@
 {
   "id": "demo-blog",
   "repo": "repo.bundle",
-  "url": "https://blog.example.com",
+  "url": "http://localhost:4175",
+  "start": "node -e \"require('node:http').createServer((request, response) => response.end('demo blog')).listen(4175)\"",
   "stories_file": "stories.md",
   "examples_dir": "examples",
   "fixed_ref": "v2.3.0",

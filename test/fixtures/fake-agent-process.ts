@@ -36,7 +36,7 @@ test("fails on purpose", async ({ page }) => {
 const flaky = `
 test("fails on every second run", async ({ page }) => {
   const { existsSync, readFileSync, writeFileSync } = await import("node:fs")
-  const counter = process.env.FLAKY_COUNTER ?? ""
+  const counter = ${JSON.stringify(process.env.FLAKY_COUNTER ?? "")}
   const runs = (existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0) + 1
   writeFileSync(counter, String(runs))
   await page.goto("/")
@@ -55,10 +55,16 @@ if (mode === "hang") {
 }
 
 const suite = header + addsTodo + countsLeft + failsOnPurpose
-const suites: Record<string, string> = { flaky: suite + flaky, broken: header + failsOnPurpose }
+const anonymous = `${header}${addsTodo}\ntest.describe(() => {${countsLeft}})\n${failsOnPurpose}`
+const suites: Record<string, string> = { flaky: anonymous + flaky, broken: header + failsOnPurpose }
 
 if (mode === "signal") {
   await writeFile("tests/todo.spec.ts", suite)
+  const answers = await fetch("http://localhost:4173").then(
+    () => true,
+    () => false,
+  )
+  console.log(`app answers ${answers}`)
   console.log(execFileSync("./coverage", { encoding: "utf8" }))
 }
 

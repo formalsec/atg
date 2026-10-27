@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os"
 import { basename, join, relative } from "node:path"
 import { after, describe, test } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
-import { startApp } from "../src/app-runtime.ts"
+import { holdUrl, startApp } from "../src/app-runtime.ts"
 import { findApp, loadApps } from "../src/apps.ts"
 import { resolveVersions } from "../src/repo.ts"
 
@@ -221,10 +221,10 @@ describe("atg run with a fake agent", () => {
     assert.equal(statSync(join(runDir, "agent-stdout.txt")).mtimeMs, agentOutput)
     const unfinished = atgIn(runs, "eval", "not-a-run")
     assert.equal(unfinished.status, 1)
-    assert.match(unfinished.stderr, /run not-a-run is not finished/)
+    assert.match(unfinished.stderr, /run not-a-run has no suite to evaluate: its generate stage did not finish/)
   })
 
-  test("eval --only buggy reuses the saved fixed results, and errors without them", async () => {
+  test("eval --only buggy reuses the saved fixed results, also when a killed run left no metrics.json, and errors without them", async () => {
     const runDir = runDirOf(await configFile("suite.json", {}))
     const fixedResults = join(runDir, "results", "fixed", "repetitions.json")
     const saved = statSync(fixedResults).mtimeMs
@@ -238,6 +238,7 @@ describe("atg run with a fake agent", () => {
 
     const copies = join(dir, "copies")
     await cp(runDir, join(copies, basename(runDir)), { recursive: true })
+    await rm(join(copies, basename(runDir), "metrics.json"))
     const otherR = atgIn(copies, "eval", basename(runDir), "--only", "buggy")
     assert.equal(otherR.status, 1)
     assert.match(otherR.stdout, /^error buggy: the saved fixed results come from --reruns 1, not 3: give --reruns 1/m)
@@ -284,13 +285,18 @@ describe("atg run with a fake agent", () => {
     assert.match(result.stdout, new RegExp(`^\\| Evaluation-hours \\| R=1 ${evaluationHours} h, R=3 [\\d.]+ h, R=5 [\\d.]+ h \\|`, "m"))
   })
 
-  test("with coverage_signal [lines], the agent can call the signal command and each call is counted", async () => {
-    const file = await configFile("signal.json", { agent: { name: "fake", model: "signal" }, coverage_signal: ["lines"] })
+  test("with coverage_signal [lines] and no url input, the app runs only during each counted signal call", async () => {
+    const file = await configFile("signal.json", {
+      agent: { name: "fake", model: "signal" },
+      inputs: ["task"],
+      coverage_signal: ["lines"],
+    })
     const result = atgRun([file, "--reruns", "1"])
     assert.equal(result.status, 0, result.stdout + result.stderr)
     const runDir = runDirOf(file)
     assert.match(await readFile(join(runDir, "prompt.md"), "utf8"), /Run `\.\/coverage` to measure your current tests/)
     const agentOutput = await readFile(join(runDir, "agent-stdout.txt"), "utf8")
+    assert.match(agentOutput, /^app answers false$/m)
     assert.match(agentOutput, /^Browser-side line coverage: 74\.07% \(20 of 27\)$/m)
     assert.match(agentOutput, /^ {2}public\/help\.js: 0\.00 % of lines covered, uncovered lines 1-6$/m)
     const metrics = await readJsonFile(join(runDir, "metrics.json"))
@@ -302,6 +308,7 @@ describe("atg run with a fake agent", () => {
       "agent-stdout.txt",
       "agent.json",
       "app-generate.log",
+      "app-signal.log",
       "config.json",
       "env.json",
       "metrics.json",
@@ -421,7 +428,7 @@ describe("atg run with a fake agent", () => {
     assert.equal(await appAnswers(), false)
   })
 
-  test("a flaky test is classified flaky and never revealing, and a test that always fails is broken", async () => {
+  test("a flaky test is flaky and never revealing, a test that always fails is broken, and an anonymous describe is no problem", async () => {
     const file = await configFile("flaky.json", { agent: { name: "fake", model: "flaky" } })
     const result = atgRun([file, "--reruns", "2"], { FLAKY_COUNTER: join(dir, "flaky-counter") })
     assert.equal(result.status, 0, result.stdout + result.stderr)
@@ -440,6 +447,8 @@ describe("atg run with a fake agent", () => {
         { key: "todo.spec.ts › fails on every second run", fixed: "flaky" },
       ],
     )
+    const counts = tests.find((test: { key: string }) => test.key === "todo.spec.ts ›  › counts what is left after a todo is done")
+    assert.equal(counts?.buggy, "revealing")
   })
 
   test("a suite with no stable_pass test is ok, with caught false and the reason", async () => {
@@ -468,6 +477,20 @@ describe("app runtime", () => {
       await instance.stop()
       assert.equal(await appAnswers(), false)
     }
+  })
+
+  test("a second hold on the same url waits until the first is released", async () => {
+    const release = await holdUrl("http://localhost:4199")
+    let held = false
+    const second = holdUrl("http://localhost:4199/other").then(next => {
+      held = true
+      return next
+    })
+    await sleep(1200)
+    assert.equal(held, false)
+    await release()
+    await (await second)()
+    assert.equal(held, true)
   })
 })
 
@@ -530,5 +553,15 @@ describe("atg run --dry-run on a real agent config", () => {
     assert.equal(statSync(command).mode & 0o111, 0o111, "the signal command is executable")
     assert.match(await readFile(command, "utf8"), new RegExp(` signal ${runDirOf(file)}\n$`))
     assert.match(await readFile(join(runDirOf(file), "prompt.md"), "utf8"), /Run `\.\/coverage`/)
+  })
+
+  test("refuses a workspace inside the home folder, where parent CLAUDE.md files would reach the agent", async () => {
+    const home = join(dir, "home")
+    await mkdir(join(home, "tmp"), { recursive: true })
+    const file = await configFile("claude-home.json", { agent: { name: "claude", model: "claude-opus-5-5" } })
+    const result = atgRun([file, "--dry-run"], { HOME: home, TMPDIR: join(home, "tmp") })
+    assert.equal(result.status, 1, result.stdout + result.stderr)
+    assert.match(result.stderr, /prepare failed: the workspace \S+ is inside \S+, set TMPDIR to a folder outside it/)
+    assert.deepEqual(await readdir(join(home, "tmp")), [])
   })
 })

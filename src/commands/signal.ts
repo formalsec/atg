@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs"
 import { appendFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { startApp } from "../app-runtime.ts"
 import { appsDir } from "../apps.ts"
 import { measure } from "../coverage.ts"
 import { quote } from "../process.ts"
@@ -17,10 +18,12 @@ export async function installSignal(workspace: string, runDir: string) {
 
 export async function signal(runDir: string) {
   const { config, env, app, deadline } = await readRun(runDir)
-  if (app.url === undefined) throw new Error(`app "${app.id}" has no url to test against`)
   stopOnSignals(runDir, true)
   await appendFile(join(runDir, runFiles.signalCalls), `${JSON.stringify({ at: new Date().toISOString() })}\n`)
   const tools = coverageTools.filter(tool => config.coverage_signal.includes(tool.name))
+  const instance = config.inputs.includes("url")
+    ? undefined
+    : await startApp(app, env.app.fixed.sha, join(runDir, "app-signal.log"))
   const outDir = await tempDir("atg-signal-")
   try {
     const results = await measure({
@@ -36,6 +39,7 @@ export async function signal(runDir: string) {
     for (const tool of tools) console.log(describe(tool.label, results[tool.name]))
   } finally {
     await rm(outDir, { recursive: true, force: true })
+    await instance?.stop()
   }
 }
 

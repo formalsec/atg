@@ -262,18 +262,18 @@ describe("atg new", () => {
     answers[3] = `${keys.enter}m1${keys.enter}`
     answers[4] = `abc${keys.enter}${keys.backspace.repeat(3)}${keys.enter}`
     answers[5] = `-1${keys.enter}${keys.backspace.repeat(2)}3${keys.enter}`
-    answers[8] = `0${keys.enter}${keys.backspace}45${keys.enter}`
+    answers[8] = `0${keys.enter}${keys.backspace}1.5${keys.enter}`
     answers[9] = `x${keys.enter}${keys.backspace}2${keys.enter}`
     const { code, output } = await wizard(["--out", out], answers)
     assert.equal(code, 0, output)
     assert.match(output, /model must not be empty/)
     assert.match(output, /max_turns must be a whole number above 0, or empty for no limit/)
     assert.match(output, /max_budget_usd must be a number above 0, or empty for no limit/)
-    assert.match(output, /timeout_min must be a whole number above 0/)
+    assert.match(output, /timeout_min must be a number above 0/)
     assert.match(output, /rep must be a whole number above 0/)
     const config = JSON.parse(await readFile(out, "utf8"))
     assert.deepEqual(config.agent, { name: "claude", model: "m1", max_budget_usd: 3 })
-    assert.equal(config.timeout_min, 45)
+    assert.equal(config.timeout_min, 1.5)
     assert.equal(config.rep, 2)
   })
 

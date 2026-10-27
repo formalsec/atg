@@ -3,7 +3,7 @@ import { Command, InvalidArgumentError, Option } from "commander"
 import { listApps } from "./commands/apps.ts"
 import { doctor } from "./commands/doctor.ts"
 import { evaluateRun, evaluationStages } from "./commands/eval.ts"
-import { newConfig } from "./commands/new.ts"
+import { isWholeAboveZero, newConfig } from "./commands/new.ts"
 import { pilot } from "./commands/pilot.ts"
 import { run } from "./commands/run.ts"
 import { schema } from "./commands/schema.ts"
@@ -61,7 +61,7 @@ program
 
 program
   .command("signal")
-  .description("Run the workspace tests of a run in progress on the running fixed app and print the coverage signal")
+  .description("Run the workspace tests of a run in progress on the fixed app and print the coverage signal")
   .argument("<run_dir>", "run folder")
   .action(signal)
 
@@ -79,7 +79,7 @@ program
   .action(doctor)
 
 function wholeAboveZero(value: string) {
-  if (!/^[1-9]\d*$/.test(value)) throw new InvalidArgumentError("must be a whole number above 0")
+  if (!isWholeAboveZero(value)) throw new InvalidArgumentError("must be a whole number above 0")
   return Number(value)
 }
 

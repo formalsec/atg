@@ -1,4 +1,6 @@
-import { readFile, rm } from "node:fs/promises"
+import { readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import type { App } from "./apps.ts"
 import { type Exit, launch } from "./process.ts"
@@ -8,13 +10,29 @@ import { tempDir } from "./temp.ts"
 const startLimitMs = 120_000
 const stopLimitMs = 30_000
 
+export async function holdUrl(url: string) {
+  const file = join(tmpdir(), `atg-url-${new URL(url).host.replaceAll(":", "-")}.lock`)
+  let told = false
+  for (;;) {
+    try {
+      await writeFile(file, String(process.pid), { flag: "wx" })
+      return () => rm(file, { force: true })
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error
+    }
+    const holder = await readFile(file, "utf8").catch(() => "")
+    if (holder !== "" && !running(Number(holder))) {
+      await rm(file, { force: true })
+      continue
+    }
+    if (!told) console.error(`waiting for ${url}: atg process ${holder} uses it`)
+    told = true
+    await sleep(500)
+  }
+}
+
 export async function startApp(app: App, sha: string, logFile: string) {
   const { url, start } = app
-  if (url === undefined) throw new Error(`app "${app.id}" has no url to test against`)
-  if (start === undefined) {
-    if (!(await answers(url))) throw new Error(`app "${app.id}" has no start command and ${url} does not answer`)
-    return { url, stop: async () => {} }
-  }
   if (await answers(url)) throw new Error(`${url} answers before the app started; stop whatever holds it`)
   const dir = await tempDir("atg-app-")
   const removeDir = () => rm(dir, { recursive: true, force: true })
@@ -23,12 +41,17 @@ export async function startApp(app: App, sha: string, logFile: string) {
     throw error
   })
   const proc = launch("sh", ["-c", start], { cwd: dir, env: process.env, stdout: logFile, stderr: logFile })
-  const stop = async () => {
-    proc.kill()
-    await proc.exit
-    await waitUntilSilent(url)
-    await removeDir()
+  let stopping: Promise<void> | undefined
+  const halt = async () => {
+    try {
+      proc.kill()
+      await proc.exit
+      await waitUntilSilent(url)
+    } finally {
+      await removeDir()
+    }
   }
+  const stop = () => (stopping ??= halt())
   try {
     await waitUntilAnswers(url, proc.exit)
   } catch (error) {
@@ -62,6 +85,15 @@ async function answers(url: string) {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(2000) })
     await response.body?.cancel()
+    return true
+  } catch {
+    return false
+  }
+}
+
+function running(pid: number) {
+  try {
+    process.kill(pid, 0)
     return true
   } catch {
     return false

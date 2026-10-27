@@ -4,7 +4,12 @@ import { type AgentAdapter, agents } from "../../src/registries.ts"
 const script = join(import.meta.dirname, "fake-agent-process.ts")
 
 const fake: AgentAdapter = {
-  invocation: ({ agent }) => ({ command: process.execPath, args: [script, agent.model], env: {}, isolation: "none" }),
+  invocation: ({ agent }) => ({
+    command: process.execPath,
+    args: [script, agent.model],
+    env: { FLAKY_COUNTER: process.env.FLAKY_COUNTER ?? "" },
+    isolation: "none",
+  }),
   parse: ({ stdout }) =>
     stdout.includes("suite written")
       ? {

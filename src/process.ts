@@ -7,6 +7,17 @@ type Options = { cwd: string; env: NodeJS.ProcessEnv; input?: string; stdout: st
 
 const live = new Set<number>()
 
+const passedEnv = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM"]
+
+export function cleanEnv(extra: string[] = []) {
+  const env: Record<string, string> = {}
+  for (const name of [...passedEnv, ...extra]) {
+    const value = process.env[name]
+    if (value !== undefined) env[name] = value
+  }
+  return env
+}
+
 export function launch(command: string, args: string[], options: Options) {
   const stdout = openSync(options.stdout, "a")
   const stderr = options.stderr === options.stdout ? stdout : openSync(options.stderr, "a")
