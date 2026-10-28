@@ -32,6 +32,17 @@ const resultSchema = z.object({
   modelUsage: z.record(z.string(), usageSchema).default({}),
 })
 
+const assistantSchema = z.object({
+  type: z.literal("assistant"),
+  message: z.object({ content: z.array(z.unknown()) }),
+})
+
+const toolCallSchema = z.object({
+  type: z.literal("tool_use"),
+  name: z.string(),
+  input: z.object({ file_path: z.string(), command: z.string(), pattern: z.string() }).partial(),
+})
+
 export const claude: AgentAdapter = {
   invocation({ agent, commands }) {
     const { isolation, args, env } = isolate()
@@ -40,7 +51,8 @@ export const claude: AgentAdapter = {
       args: [
         "-p",
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
         "--model",
         agent.model,
         ...(agent.max_turns === undefined ? [] : ["--max-turns", String(agent.max_turns)]),
@@ -61,6 +73,7 @@ export const claude: AgentAdapter = {
     }
   },
   parse,
+  activity,
   version,
   async checks() {
     return [await check("Claude CLI", version), await check("Claude isolation", isolationAvailable)]
@@ -75,7 +88,8 @@ function isolate(): Pick<Invocation, "isolation" | "args" | "env"> {
 }
 
 function parse({ stdout, stderr, code, error }: AgentOutput): AgentResult {
-  const parsed = resultSchema.safeParse(jsonOrNothing(stdout))
+  const lastLine = stdout.trim().split("\n").at(-1) ?? ""
+  const parsed = resultSchema.safeParse(jsonOrNothing(lastLine))
   if (!parsed.success) {
     const why = [`exit ${code}`, error, (stderr || stdout).trim().slice(-2000)].filter(Boolean).join(": ")
     return { status: "agent_error", error: `no parseable result (${why})` }
@@ -101,6 +115,21 @@ function parse({ stdout, stderr, code, error }: AgentOutput): AgentResult {
     cost_source: `estimate:${[...new Set(usage.map(model => model.costBasis))].join("+") || "none"}`,
     models: Object.keys(result.modelUsage),
   }
+}
+
+function activity(line: string) {
+  const event = assistantSchema.safeParse(jsonOrNothing(line))
+  if (!event.success) return undefined
+  const calls = event.data.message.content.flatMap(block => {
+    const call = toolCallSchema.safeParse(block)
+    return call.success ? [describeCall(call.data)] : []
+  })
+  return calls.length > 0 ? calls.join("\n") : undefined
+}
+
+function describeCall({ name, input }: z.infer<typeof toolCallSchema>) {
+  const target = input.file_path ?? input.command?.split("\n")[0] ?? input.pattern
+  return target === undefined ? name : `${name} ${target}`
 }
 
 async function version() {

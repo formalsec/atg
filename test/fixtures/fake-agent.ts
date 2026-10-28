@@ -22,6 +22,7 @@ const fake: AgentAdapter = {
           models: ["fake-model"],
         }
       : { status: "agent_error", error: "the fake agent wrote no suite" },
+  activity: line => line || undefined,
   version: async () => "fake 1.0",
   checks: async () => [],
 }

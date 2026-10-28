@@ -137,6 +137,8 @@ describe("atg run with a fake agent", () => {
       },
     })
     assert.deepEqual(Object.keys(metrics.wall_ms), ["prepare", "generate", "fixed", "buggy", "bugs", "coverage"])
+    for (const stage of Object.keys(metrics.wall_ms)) assert.match(result.stderr, new RegExp(`${stage} \\d.* s$`, "m"))
+    assert.match(result.stderr, /suite written$/m)
     const { fixed, buggy, bugs } = metrics.repetition_ms
     for (const runs of [fixed, buggy, bugs.counter, bugs.help]) assert.equal(runs.length, 3)
     assert.deepEqual(await readJsonFile(join(runDir, "results", "verdicts.json")), {
@@ -502,7 +504,7 @@ describe("atg run --dry-run on a real agent config", () => {
     })
     const result = atgRun([file, "--dry-run"])
     assert.equal(result.status, 0, result.stdout + result.stderr)
-    assert.match(result.stdout, /claude -p --output-format json --model claude-opus-5-5 --max-turns 30 --permission-mode dontAsk/)
+    assert.match(result.stdout, /claude -p --output-format stream-json --verbose --model claude-opus-5-5 --max-turns 30 --permission-mode dontAsk/)
     assert.match(result.stdout, /'Bash\(npx playwright test \*\)' --no-session-persistence --strict-mcp-config (--bare|--setting-sources '')/)
     assert.match(result.stdout, / < \S+prompt\.md$/m)
     const workspace = result.stdout.match(/^workspace (.+)$/m)?.[1] ?? assert.fail("no workspace printed")

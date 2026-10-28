@@ -53,7 +53,7 @@ describe("claude adapter invocation", () => {
     assert.equal(command, "claude")
     const line = args.join(" ")
     for (const part of [
-      "-p --output-format json --model m1 --max-turns 5 --max-budget-usd 2",
+      "-p --output-format stream-json --verbose --model m1 --max-turns 5 --max-budget-usd 2",
       "--permission-mode dontAsk",
       "--allowedTools Read(./**) Edit(./**) Write(./**) Bash(npx playwright test) Bash(npx playwright test *)",
       "--no-session-persistence --strict-mcp-config",
@@ -111,6 +111,11 @@ describe("claude adapter result", () => {
     })
   })
 
+  test("reads the result from the last line of the event stream", () => {
+    const stream = `${JSON.stringify({ type: "system", subtype: "init" })}\n${result({})}\n`
+    assert.equal(parse(stream).status, "ok")
+  })
+
   test("a turn or budget limit is a finished run with its stop reason", () => {
     for (const subtype of ["error_max_turns", "error_max_budget_usd"]) {
       const parsed = parse(result({ subtype, is_error: true }))
@@ -127,5 +132,28 @@ describe("claude adapter result", () => {
     const garbage = claude.parse({ stdout: "not json", stderr: "boom", code: 1 })
     assert.equal(garbage.status, "agent_error")
     assert.match(garbage.error ?? "", /^no parseable result \(exit 1: boom\)$/)
+  })
+})
+
+describe("claude adapter activity", () => {
+  test("names each tool call with its file, command or pattern", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "Reading first" },
+          { type: "tool_use", name: "Read", input: { file_path: "/w/src/app.ts" } },
+          { type: "tool_use", name: "Bash", input: { command: "npx playwright test\n--reporter list", description: "Run" } },
+          { type: "tool_use", name: "Grep", input: { pattern: "todo" } },
+          { type: "tool_use", name: "TodoWrite", input: { todos: [] } },
+        ],
+      },
+    })
+    assert.equal(claude.activity(line), "Read /w/src/app.ts\nBash npx playwright test\nGrep todo\nTodoWrite")
+  })
+
+  test("ignores lines without a tool call", () => {
+    const text = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })
+    for (const line of [result({}), text, "not json", ""]) assert.equal(claude.activity(line), undefined)
   })
 })

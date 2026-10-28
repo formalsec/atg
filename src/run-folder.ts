@@ -1,3 +1,4 @@
+import { log } from "@clack/prompts"
 import { existsSync, readFileSync, rmSync } from "node:fs"
 import { constants } from "node:os"
 import { join } from "node:path"
@@ -33,6 +34,8 @@ export const stagesSchema = z.record(z.string(), z.object({ ms: z.number(), erro
 
 const stopSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"]
 
+export const progress = { output: process.stderr }
+
 export async function readRun(runDir: string) {
   const apps = await loadApps()
   const config = configSchema(apps).parse(await readJson(join(runDir, runFiles.config)))
@@ -48,16 +51,28 @@ export async function mergeEnv(runDir: string, fields: Record<string, unknown>) 
 }
 
 export async function runStage(runDir: string, name: string, work: () => Promise<void>) {
+  log.info(name, progress)
   const started = performance.now()
   const error = await work().then(
     () => undefined,
     (failure: unknown) => (failure instanceof Error ? failure.message : String(failure)),
   )
+  const ms = Math.round(performance.now() - started)
   const file = join(runDir, runFiles.stages)
   const stages = existsSync(file) ? stagesSchema.parse(await readJson(file)) : {}
-  stages[name] = { ms: Math.round(performance.now() - started), error }
+  stages[name] = { ms, error }
   await writeJson(file, stages)
+  if (error === undefined) log.success(`${name} ${duration(ms)}`, { ...progress, spacing: 0 })
+  else log.error(`${name} failed after ${duration(ms)}: ${error}`, { ...progress, spacing: 0 })
   return error
+}
+
+export function duration(ms: number) {
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)} s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s`
+  if (seconds < 48 * 3600) return `${(seconds / 3600).toFixed(1)} h`
+  return `${(seconds / 86_400).toFixed(1)} days`
 }
 
 export function stopOnSignals(runDir: string, keepWorkspace = false) {

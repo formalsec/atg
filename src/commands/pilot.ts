@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path"
 import * as z from "zod"
 import { readJson } from "../json.ts"
-import { readRun, runFiles } from "../run-folder.ts"
+import { duration, readRun, runFiles } from "../run-folder.ts"
 import { evaluationStages } from "./eval.ts"
 
 const grid = { runs: 11_520, agents: 3 }
@@ -132,12 +132,4 @@ function count(value: number) {
 
 function usd(value: number) {
   return value.toLocaleString("en-US", { style: "currency", currency: "USD" })
-}
-
-function duration(ms: number) {
-  const seconds = ms / 1000
-  if (seconds < 60) return `${seconds.toFixed(1)} s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s`
-  if (seconds < 48 * 3600) return `${(seconds / 3600).toFixed(1)} h`
-  return `${(seconds / 86_400).toFixed(1)} days`
 }

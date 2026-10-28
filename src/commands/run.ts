@@ -1,3 +1,4 @@
+import { intro } from "@clack/prompts"
 import { existsSync } from "node:fs"
 import { mkdir, rm } from "node:fs/promises"
 import { join, resolve } from "node:path"
@@ -6,7 +7,7 @@ import { findApp, loadApps } from "../apps.ts"
 import { parseConfig } from "../config.ts"
 import { readJson } from "../json.ts"
 import { identify } from "../run-id.ts"
-import { removeWorkspace, runFiles, runStage, stopOnSignals } from "../run-folder.ts"
+import { progress, removeWorkspace, runFiles, runStage, stopOnSignals } from "../run-folder.ts"
 import { finalize } from "../stages/finalize.ts"
 import { agentInvocation, commandLine, generate } from "../stages/generate.ts"
 import { prepare } from "../stages/prepare.ts"
@@ -24,6 +25,7 @@ export async function run(file: string, options: Options) {
     console.log(`run_id ${id} is done, nothing to do (--force redoes it)\n${runDir}`)
     return
   }
+  intro(`atg run ${id}`, progress)
   const release = options.dryRun ? async () => {} : await holdUrl(app.url)
   await rm(runDir, { recursive: true, force: true })
   await mkdir(runDir, { recursive: true })

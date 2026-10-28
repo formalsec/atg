@@ -1,12 +1,14 @@
-import { existsSync } from "node:fs"
+import { log } from "@clack/prompts"
+import { closeSync, existsSync, fstatSync, openSync, readSync, realpathSync } from "node:fs"
 import { cp, readFile } from "node:fs/promises"
 import { join } from "node:path"
+import { StringDecoder } from "node:string_decoder"
 import { startApp } from "../app-runtime.ts"
 import { signalCommand } from "../commands/signal.ts"
 import { writeJson } from "../json.ts"
 import { cleanEnv, quote, runWithTimeout } from "../process.ts"
 import { agentEntry, type AgentResult, frameworkEntry, type Invocation } from "../registries.ts"
-import { mergeEnv, readRun, runFiles } from "../run-folder.ts"
+import { mergeEnv, progress, readRun, runFiles } from "../run-folder.ts"
 
 export async function agentInvocation(runDir: string) {
   const { config, env, deadline } = await readRun(runDir)
@@ -39,7 +41,7 @@ export async function generate(runDir: string) {
   try {
     const stdout = join(runDir, runFiles.agentStdout)
     const stderr = join(runDir, runFiles.agentStderr)
-    const exit = await runWithTimeout(invocation.command, invocation.args, {
+    const running = runWithTimeout(invocation.command, invocation.args, {
       cwd: invocation.cwd,
       env: invocation.env,
       input: invocation.prompt,
@@ -47,6 +49,9 @@ export async function generate(runDir: string) {
       stderr,
       timeoutMs: deadline - Date.now(),
     })
+    const workspaces = [env.workspace, realpathSync(env.workspace)]
+    const stopFollowing = followOutput(stdout, line => showActivity(agent.activity(line), workspaces))
+    const exit = await running.finally(stopFollowing)
     const result: AgentResult = exit.timedOut
       ? { status: "timeout", stop_reason: "timeout_min" }
       : agent.parse({ stdout: await readFile(stdout, "utf8"), stderr: await readFile(stderr, "utf8"), ...exit })
@@ -70,4 +75,35 @@ export async function generate(runDir: string) {
 
 function secret(key: string) {
   return /key|token|secret|password/i.test(key)
+}
+
+function showActivity(activity: string | undefined, workspaces: string[]) {
+  if (activity === undefined) return
+  const short = workspaces.reduce((text, workspace) => text.replaceAll(`${workspace}/`, ""), activity)
+  const width = progress.output.isTTY ? progress.output.columns - 3 : Infinity
+  const fitted = short.split("\n").map(line => (line.length > width ? `${line.slice(0, width - 1)}…` : line))
+  log.message(fitted, { ...progress, spacing: 0 })
+}
+
+function followOutput(file: string, onLine: (line: string) => void) {
+  const decoder = new StringDecoder("utf8")
+  let position = 0
+  let partial = ""
+  const readNew = () => {
+    const fd = openSync(file, "r")
+    try {
+      const chunk = Buffer.alloc(fstatSync(fd).size - position)
+      position += readSync(fd, chunk, 0, chunk.length, position)
+      const parts = (partial + decoder.write(chunk)).split("\n")
+      partial = parts.pop() ?? ""
+      for (const line of parts) onLine(line)
+    } finally {
+      closeSync(fd)
+    }
+  }
+  const timer = setInterval(readNew, 500)
+  return () => {
+    clearInterval(timer)
+    readNew()
+  }
 }

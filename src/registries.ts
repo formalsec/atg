@@ -44,6 +44,7 @@ export type AgentResult = z.infer<typeof agentResultSchema>
 export type AgentAdapter = {
   invocation(input: AgentInput): Invocation
   parse(output: AgentOutput): AgentResult
+  activity(stdoutLine: string): string | undefined
   version(): Promise<string>
   checks(): Promise<Check[]>
 }
