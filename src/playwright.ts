@@ -5,18 +5,41 @@ import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import * as z from "zod"
-import { check } from "../check.ts"
-import { cleanEnv, runWithTimeout } from "../process.ts"
-import type { FrameworkAdapter, SuiteResult } from "../registries.ts"
-import { tempDir } from "../temp.ts"
+import { cleanEnv, runWithTimeout } from "./process.ts"
+import { tempDir } from "./run-folder.ts"
 
 const exec = promisify(execFile)
 const require = createRequire(import.meta.url)
 const packages = ["@playwright/test", "playwright", "playwright-core"]
-const testDir = "tests"
 const killGraceMs = 60_000
 
+export const testDir = "tests"
+export const testCommand = "npx playwright test"
+
 let chromium: Promise<string> | undefined
+
+export const suiteResultSchema = z.object({
+  tests: z.array(
+    z.object({
+      key: z.string(),
+      status: z.enum(["passed", "failed", "flaky", "skipped"]),
+      duration_ms: z.number(),
+      error: z.string().optional(),
+    }),
+  ),
+  errors: z.array(z.string()),
+})
+
+export type SuiteResult = z.infer<typeof suiteResultSchema>
+
+type SuiteRun = {
+  testsDir: string
+  baseUrl: string
+  reportFile: string
+  logFile: string
+  timeoutMs: number
+  collectors: { module: string; dir: string }[]
+}
 
 const testSchema = z.object({
   status: z.enum(["expected", "unexpected", "flaky", "skipped"]),
@@ -47,43 +70,36 @@ const statuses: Record<z.infer<typeof testSchema>["status"], SuiteResult["tests"
   skipped: "skipped",
 }
 
-export const playwright: FrameworkAdapter = {
-  testDir,
-  testCommand: "npx playwright test",
-  scaffold: (dir, baseUrl) => project(dir, agentConfig(baseUrl)),
-  async run({ testsDir, baseUrl, reportFile, logFile, timeoutMs, collectors }) {
-    const dir = await tempDir("atg-suite-")
-    try {
-      await project(dir, suiteConfig(reportFile, timeoutMs))
-      await writeFile(join(dir, "node_modules", "@playwright", "test", "index.js"), fixture)
-      await writeFile(join(dir, "node_modules", "@playwright", "test", "index.mjs"), fixtureModule)
-      if (existsSync(testsDir)) await cp(testsDir, join(dir, testDir), { recursive: true })
-      const browser = await browserVersion()
-      await rm(reportFile, { force: true })
-      await runWithTimeout(process.execPath, [join(dir, "node_modules", "@playwright", "test", "cli.js"), "test"], {
-        cwd: dir,
-        env: { ...cleanEnv(["PLAYWRIGHT_BROWSERS_PATH"]), BASE_URL: baseUrl, ATG_COLLECTORS: JSON.stringify(collectors) },
-        stdout: logFile,
-        stderr: logFile,
-        timeoutMs: timeoutMs + killGraceMs,
-      })
-      if (!existsSync(reportFile)) throw new Error(`the suite run wrote no report, see ${logFile}`)
-      const report = reportSchema.parse(JSON.parse(await readFile(reportFile, "utf8")))
-      return {
-        tests: report.suites.flatMap(file => collect(file, [file.title])),
-        errors: report.errors.map(error => plain(error.message)),
-        versions: { "@playwright/test": version(), chromium: browser },
-      }
-    } finally {
-      await rm(dir, { recursive: true, force: true })
+export function scaffold(dir: string, baseUrl?: string) {
+  return project(dir, agentConfig(baseUrl))
+}
+
+export async function run({ testsDir, baseUrl, reportFile, logFile, timeoutMs, collectors }: SuiteRun) {
+  const dir = await tempDir("atg-suite-")
+  try {
+    await project(dir, suiteConfig(reportFile, timeoutMs))
+    await writeFile(join(dir, "node_modules", "@playwright", "test", "index.js"), fixture)
+    await writeFile(join(dir, "node_modules", "@playwright", "test", "index.mjs"), fixtureModule)
+    if (existsSync(testsDir)) await cp(testsDir, join(dir, testDir), { recursive: true })
+    const browser = await browserVersion()
+    await rm(reportFile, { force: true })
+    await runWithTimeout(process.execPath, [join(dir, "node_modules", "@playwright", "test", "cli.js"), "test"], {
+      cwd: dir,
+      env: { ...cleanEnv(["PLAYWRIGHT_BROWSERS_PATH"]), BASE_URL: baseUrl, ATG_COLLECTORS: JSON.stringify(collectors) },
+      stdout: logFile,
+      stderr: logFile,
+      timeoutMs: timeoutMs + killGraceMs,
+    })
+    if (!existsSync(reportFile)) throw new Error(`the suite run wrote no report, see ${logFile}`)
+    const report = reportSchema.parse(JSON.parse(await readFile(reportFile, "utf8")))
+    return {
+      tests: report.suites.flatMap(file => collect(file, [file.title])),
+      errors: report.errors.map(error => plain(error.message)),
+      versions: { "@playwright/test": version(), chromium: browser },
     }
-  },
-  async checks() {
-    return [
-      await check("Playwright", async () => version()),
-      await check("Chromium", browserVersion),
-    ]
-  },
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 }
 
 async function project(dir: string, config: string) {

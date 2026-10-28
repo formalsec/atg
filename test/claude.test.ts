@@ -1,15 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
-import { claude } from "../src/adapters/claude.ts"
-import { commandLine } from "../src/stages/generate.ts"
+import * as claude from "../src/claude.ts"
+import type { Config } from "../src/config.ts"
+import { commandLine } from "../src/run.ts"
 
-const input = {
-  workspace: "/w",
-  prompt: "write tests",
-  agent: { name: "claude", model: "m1", max_turns: 5, max_budget_usd: 2 },
-  timeLimitMs: 60_000,
-  commands: ["npx playwright test"],
-}
+const agent: Config["agent"] = { name: "claude", model: "m1", max_turns: 5, max_budget_usd: 2 }
+const commands = ["npx playwright test"]
 
 const usage = (tokens: number, costUSD: number) => ({
   inputTokens: tokens,
@@ -49,7 +45,7 @@ function withApiKey<T>(value: string | undefined, run: () => T) {
 
 describe("claude adapter invocation", () => {
   test("runs headless with limits, dontAsk and an explicit tool list", () => {
-    const { command, args } = withApiKey(undefined, () => claude.invocation(input))
+    const { command, args } = withApiKey(undefined, () => claude.invocation(agent, commands))
     assert.equal(command, "claude")
     const line = args.join(" ")
     for (const part of [
@@ -63,7 +59,7 @@ describe("claude adapter invocation", () => {
   })
 
   test("without an API key, skips setting sources and excludes user memory", () => {
-    const { args, env, isolation } = withApiKey(undefined, () => claude.invocation(input))
+    const { args, env, isolation } = withApiKey(undefined, () => claude.invocation(agent, commands))
     assert.equal(isolation, "settings")
     assert.deepEqual(env, {})
     assert.equal(args.includes("--bare"), false)
@@ -74,7 +70,7 @@ describe("claude adapter invocation", () => {
   })
 
   test("with an API key, runs bare and passes only that key", () => {
-    const { args, env, isolation } = withApiKey("sk-test", () => claude.invocation(input))
+    const { args, env, isolation } = withApiKey("sk-test", () => claude.invocation(agent, commands))
     assert.equal(isolation, "bare")
     assert.deepEqual(env, { ANTHROPIC_API_KEY: "sk-test" })
     assert.ok(args.includes("--bare"))
@@ -82,14 +78,14 @@ describe("claude adapter invocation", () => {
   })
 
   test("with an API key, the saved command names the key and never shows its value", () => {
-    const invocation = withApiKey("sk-test-secret", () => claude.invocation(input))
+    const invocation = withApiKey("sk-test-secret", () => claude.invocation(agent, commands))
     const line = commandLine({ ...invocation, cwd: "/w" }, "/run/prompt.md")
     assert.ok(line.includes(`ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"`), line)
     assert.equal(line.includes("sk-test-secret"), false, line)
   })
 
   test("leaves out limits that are not set", () => {
-    const { args } = claude.invocation({ ...input, agent: { name: "claude", model: "m1" } })
+    const { args } = claude.invocation({ name: "claude", model: "m1" }, commands)
     assert.equal(args.includes("--max-turns"), false)
     assert.equal(args.includes("--max-budget-usd"), false)
   })

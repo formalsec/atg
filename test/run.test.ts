@@ -6,22 +6,31 @@ import { homedir, tmpdir } from "node:os"
 import { basename, join, relative } from "node:path"
 import { after, describe, test } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
-import { holdUrl, startApp } from "../src/app-runtime.ts"
-import { findApp, loadApps } from "../src/apps.ts"
-import { resolveVersions } from "../src/repo.ts"
+import { holdUrl, resolveVersions, startApp } from "../src/app.ts"
+import { findApp, loadApps, parseConfig } from "../src/config.ts"
+import { identify } from "../src/run.ts"
 
-const atg = join(import.meta.dirname, "fixtures", "atg.ts")
+const atg = join(import.meta.dirname, "..", "src", "cli.ts")
+const fakeClaude = join(import.meta.dirname, "fixtures", "fake-claude.ts")
 const demoBundle = join(import.meta.dirname, "..", "apps", "demo-todo", "repo.bundle")
-const atgWithFakeCoverage = join(import.meta.dirname, "fixtures", "atg-fake-coverage.ts")
 const dir = await mkdtemp(join(tmpdir(), "atg-run-"))
 const runs = join(dir, "runs")
 after(() => rm(dir, { recursive: true, force: true }))
+
+const bin = join(dir, "bin")
+await mkdir(bin)
+await writeFile(
+  join(bin, "claude"),
+  `#!/bin/sh\nFLAKY_COUNTER="${join(dir, "flaky-counter")}" exec "${process.execPath}" "${fakeClaude}" "$@"\n`,
+  { mode: 0o755 },
+)
+process.env.PATH = `${bin}:${process.env.PATH}`
 
 const base = {
   schema: 1,
   app: "demo-todo",
   inputs: ["url", "task"],
-  agent: { name: "fake", model: "suite" },
+  agent: { name: "claude", model: "suite" },
   framework: "playwright",
   coverage_signal: [],
 }
@@ -44,8 +53,8 @@ const requiredFiles = [
   "metrics.json",
 ]
 
-function atgRun(args: string[], env: NodeJS.ProcessEnv = {}, entry = atg) {
-  return spawnSync(process.execPath, [entry, "run", "--runs-dir", runs, ...args], {
+function atgRun(args: string[], env: NodeJS.ProcessEnv = {}) {
+  return spawnSync(process.execPath, [atg, "run", "--runs-dir", runs, ...args], {
     encoding: "utf8",
     env: { ...process.env, ...env },
   })
@@ -62,14 +71,8 @@ async function appsWith(id: string, app: object) {
   return apps
 }
 
-function runDirIn(apps: string, file: string) {
-  const [{ run_id }] = JSON.parse(
-    execFileSync(process.execPath, [atg, "validate", "--json", file], {
-      encoding: "utf8",
-      env: { ...process.env, ATG_APPS_DIR: apps },
-    }),
-  )
-  return join(runs, run_id)
+function runDirFrom(stdout: string) {
+  return join(runs, stdout.match(/^run_id (\S+)/m)?.[1] ?? assert.fail(`no run_id in ${stdout}`))
 }
 
 async function configFile(name: string, overrides: object) {
@@ -78,9 +81,10 @@ async function configFile(name: string, overrides: object) {
   return file
 }
 
-function runDirOf(file: string) {
-  const [{ run_id }] = JSON.parse(execFileSync(process.execPath, [atg, "validate", "--json", file], { encoding: "utf8" }))
-  return join(runs, run_id)
+async function runDirOf(file: string) {
+  const apps = await loadApps()
+  const config = parseConfig(apps, JSON.parse(await readFile(file, "utf8")), file)
+  return join(runs, (await identify(config, findApp(apps, config.app))).id)
 }
 
 async function readJsonFile(file: string) {
@@ -116,7 +120,7 @@ describe("atg run with a fake agent", () => {
     const file = await configFile("suite.json", {})
     const result = atgRun([file])
     assert.equal(result.status, 0, result.stdout + result.stderr)
-    const runDir = runDirOf(file)
+    const runDir = await runDirOf(file)
     for (const name of requiredFiles) assert.ok(existsSync(join(runDir, name)), `${name} is missing`)
     const metrics = await readJsonFile(join(runDir, "metrics.json"))
     assert.equal(metrics.status, "ok")
@@ -138,7 +142,7 @@ describe("atg run with a fake agent", () => {
     })
     assert.deepEqual(Object.keys(metrics.wall_ms), ["prepare", "generate", "fixed", "buggy", "bugs", "coverage"])
     for (const stage of Object.keys(metrics.wall_ms)) assert.match(result.stderr, new RegExp(`${stage} \\d.* s$`, "m"))
-    assert.match(result.stderr, /suite written$/m)
+    assert.match(result.stderr, /^ {2}Write tests\/todo\.spec\.ts$/m)
     const { fixed, buggy, bugs } = metrics.repetition_ms
     for (const runs of [fixed, buggy, bugs.counter, bugs.help]) assert.equal(runs.length, 3)
     assert.deepEqual(await readJsonFile(join(runDir, "results", "verdicts.json")), {
@@ -182,7 +186,7 @@ describe("atg run with a fake agent", () => {
   })
 
   test("eval --reruns 1 records the new R in metrics and env, and keeps the run_id", async () => {
-    const runDir = runDirOf(await configFile("suite.json", {}))
+    const runDir = await runDirOf(await configFile("suite.json", {}))
     const before = await readJsonFile(join(runDir, "metrics.json"))
     const result = atgIn(runs, "eval", basename(runDir), "--reruns", "1")
     assert.equal(result.status, 0, result.stdout + result.stderr)
@@ -197,7 +201,7 @@ describe("atg run with a fake agent", () => {
 
   test("is a no-op when it is done, also with another R, and --force redoes it", async () => {
     const file = await configFile("suite.json", {})
-    const metrics = join(runDirOf(file), "metrics.json")
+    const metrics = join(await runDirOf(file), "metrics.json")
     const before = statSync(metrics).mtimeMs
     const again = atgRun([file, "--reruns", "2"])
     assert.equal(again.status, 0, again.stderr)
@@ -210,7 +214,7 @@ describe("atg run with a fake agent", () => {
   })
 
   test("eval --only coverage reproduces the coverage from the saved tests without calling the agent", async () => {
-    const runDir = runDirOf(await configFile("suite.json", {}))
+    const runDir = await runDirOf(await configFile("suite.json", {}))
     const before = await readJsonFile(join(runDir, "metrics.json"))
     const agentOutput = statSync(join(runDir, "agent-stdout.txt")).mtimeMs
     const result = atgIn(runs, "eval", basename(runDir), "--only", "coverage")
@@ -227,7 +231,7 @@ describe("atg run with a fake agent", () => {
   })
 
   test("eval --only buggy reuses the saved fixed results, also when a killed run left no metrics.json, and errors without them", async () => {
-    const runDir = runDirOf(await configFile("suite.json", {}))
+    const runDir = await runDirOf(await configFile("suite.json", {}))
     const fixedResults = join(runDir, "results", "fixed", "repetitions.json")
     const saved = statSync(fixedResults).mtimeMs
     const before = await readJsonFile(join(runDir, "metrics.json"))
@@ -254,16 +258,16 @@ describe("atg run with a fake agent", () => {
   })
 
   test("pilot reports one run, its bug finding and evaluation time, and extrapolates them to the full grid", async () => {
-    const runDir = runDirOf(await configFile("suite.json", {}))
+    const runDir = await runDirOf(await configFile("suite.json", {}))
     const metrics = await readJsonFile(join(runDir, "metrics.json"))
     const result = atgIn(runs, "pilot", basename(runDir), "--concurrency", "4")
     assert.equal(result.status, 0, result.stderr)
-    const time = String.raw`[\d.]+ s`
+    const time = String.raw`(?:\d+ min )?[\d.]+ s`
     for (const row of [
-      /^Run `demo-todo__fake__playwright__\w+`: fake suite, inputs task, url, coverage_signal none, playwright, rep 1, max_budget_usd none\. Status ok \(success\)\.$/m,
+      /^Run `demo-todo__claude__playwright__\w+`: claude suite, inputs task, url, coverage_signal none, playwright, rep 1, max_budget_usd none\. Status ok \(success\)\.$/m,
       new RegExp(`^\\| Wall time \\| prepare ${time}, generate ${time}, fixed ${time}, buggy ${time}, bugs ${time}, coverage ${time}; total ${time} \\|$`, "m"),
       /^\| Tokens \| input 10, output 20, cache read 0, cache creation 0 \|$/m,
-      /^\| Cost \| \$0\.00 \(fake\) \|$/m,
+      /^\| Cost \| \$0\.00 \(estimate:fake\) \|$/m,
       /^\| Turns \| 3 \|$/m,
       /^\| Coverage \| lines 74\.07% \(20 of 27\), html not measured, api not measured \|$/m,
       /^## Bug finding$/m,
@@ -275,7 +279,7 @@ describe("atg run with a fake agent", () => {
       new RegExp(`^\\| Evaluation time \\| fixed ${time}, buggy ${time}, bugs ${time}, coverage ${time}; total ${time} \\|$`, "m"),
       new RegExp(`^\\| One repetition \\| fixed ${time}, buggy ${time}, bugs/counter ${time}, bugs/help ${time} \\(mean of each version\\) \\|$`, "m"),
       /^## Full grid of 11,520 runs$/m,
-      /^\| Total cost \| \$0\.00 \| Every run costs what this run cost: \$0\.00 \(fake\)\. \|$/m,
+      /^\| Total cost \| \$0\.00 \| Every run costs what this run cost: \$0\.00 \(estimate:fake\)\. \|$/m,
       /each does 3,840 runs with 4 at a time/,
     ]) {
       assert.match(result.stdout, row)
@@ -289,13 +293,13 @@ describe("atg run with a fake agent", () => {
 
   test("with coverage_signal [lines] and no url input, the app runs only during each counted signal call", async () => {
     const file = await configFile("signal.json", {
-      agent: { name: "fake", model: "signal" },
+      agent: { name: "claude", model: "signal" },
       inputs: ["task"],
       coverage_signal: ["lines"],
     })
     const result = atgRun([file, "--reruns", "1"])
     assert.equal(result.status, 0, result.stdout + result.stderr)
-    const runDir = runDirOf(file)
+    const runDir = await runDirOf(file)
     assert.match(await readFile(join(runDir, "prompt.md"), "utf8"), /Run `\.\/coverage` to measure your current tests/)
     const agentOutput = await readFile(join(runDir, "agent-stdout.txt"), "utf8")
     assert.match(agentOutput, /^app answers false$/m)
@@ -322,25 +326,9 @@ describe("atg run with a fake agent", () => {
     ])
   })
 
-  test("a fake adapter registered in place of a stub shows up in metrics with no change to core", async () => {
-    const file = await configFile("fake-coverage.json", {
-      agent: { name: "fake", model: "signal" },
-      coverage_signal: ["lines"],
-      rep: 2,
-    })
-    const result = atgRun([file, "--reruns", "1"], {}, atgWithFakeCoverage)
-    assert.equal(result.status, 0, result.stdout + result.stderr)
-    const runDir = runDirOf(file)
-    const metrics = await readJsonFile(join(runDir, "metrics.json"))
-    assert.deepEqual(metrics.coverage.html, { covered: 1, total: 2, pct: 50, report: "results/coverage/html/universe.json" })
-    assert.equal(metrics.coverage.lines.pct, 74.07)
-    assert.equal(metrics.coverage.api, null)
-    assert.doesNotMatch(await readFile(join(runDir, "agent-stdout.txt"), "utf8"), /Fake pages visited/)
-  })
-
   test("killed mid-run, it leaves no process behind and a re-run starts clean", async () => {
-    const file = await configFile("slow.json", { agent: { name: "fake", model: "slow" }, inputs: ["url"] })
-    const runDir = runDirOf(file)
+    const file = await configFile("slow.json", { agent: { name: "claude", model: "slow" }, inputs: ["url"] })
+    const runDir = await runDirOf(file)
     const tempBefore = await atgTempDirs()
     const child = spawn(process.execPath, [atg, "run", "--runs-dir", runs, file], { stdio: "ignore" })
     const exited = new Promise(resolve => child.once("exit", resolve))
@@ -368,13 +356,13 @@ describe("atg run with a fake agent", () => {
 
   test("an agent that hangs past timeout_min gives timeout, kills its tree and keeps its tests", async () => {
     const file = await configFile("hang.json", {
-      agent: { name: "fake", model: "hang" },
+      agent: { name: "claude", model: "hang" },
       inputs: ["code"],
       timeout_min: 0.1,
     })
     const result = atgRun([file, "--reruns", "1"])
     assert.equal(result.status, 0, result.stdout + result.stderr)
-    const runDir = runDirOf(file)
+    const runDir = await runDirOf(file)
     const metrics = await readJsonFile(join(runDir, "metrics.json"))
     assert.equal(metrics.status, "timeout")
     assert.equal(metrics.stop_reason, "timeout_min")
@@ -396,7 +384,7 @@ describe("atg run with a fake agent", () => {
     const file = await configFile("broken.json", { app: "broken", inputs: [] })
     const result = atgRun([file], { ATG_APPS_DIR: apps })
     assert.equal(result.status, 1, result.stdout + result.stderr)
-    const runDir = runDirIn(apps, file)
+    const runDir = runDirFrom(result.stdout)
     const metrics = await readJsonFile(join(runDir, "metrics.json"))
     assert.equal(metrics.status, "infra_error")
     assert.match(metrics.error, /^generate: app "broken" did not start: the start command exited with code 3/)
@@ -422,7 +410,7 @@ describe("atg run with a fake agent", () => {
     const file = await configFile("broken-buggy.json", { app: "broken-buggy", inputs: [] })
     const result = atgRun([file, "--reruns", "1"], { ATG_APPS_DIR: apps })
     assert.equal(result.status, 1, result.stdout + result.stderr)
-    const metrics = await readJsonFile(join(runDirIn(apps, file), "metrics.json"))
+    const metrics = await readJsonFile(join(runDirFrom(result.stdout), "metrics.json"))
     assert.equal(metrics.status, "infra_error")
     assert.match(metrics.error, /^buggy: app "broken-buggy" did not start: the start command exited with code 3/)
     assert.deepEqual(metrics.fixed, { stable_pass: 2, broken: 1, flaky: 0, skipped: 0 })
@@ -431,10 +419,10 @@ describe("atg run with a fake agent", () => {
   })
 
   test("a flaky test is flaky and never revealing, a test that always fails is broken, and an anonymous describe is no problem", async () => {
-    const file = await configFile("flaky.json", { agent: { name: "fake", model: "flaky" } })
-    const result = atgRun([file, "--reruns", "2"], { FLAKY_COUNTER: join(dir, "flaky-counter") })
+    const file = await configFile("flaky.json", { agent: { name: "claude", model: "flaky" } })
+    const result = atgRun([file, "--reruns", "2"])
     assert.equal(result.status, 0, result.stdout + result.stderr)
-    const runDir = runDirOf(file)
+    const runDir = await runDirOf(file)
     const metrics = await readJsonFile(join(runDir, "metrics.json"))
     assert.equal(metrics.status, "ok")
     assert.deepEqual(metrics.fixed, { stable_pass: 2, broken: 1, flaky: 1, skipped: 0 })
@@ -454,10 +442,10 @@ describe("atg run with a fake agent", () => {
   })
 
   test("a suite with no stable_pass test is ok, with caught false and the reason", async () => {
-    const file = await configFile("no-stable.json", { agent: { name: "fake", model: "broken" } })
+    const file = await configFile("no-stable.json", { agent: { name: "claude", model: "broken" } })
     const result = atgRun([file, "--reruns", "1"])
     assert.equal(result.status, 0, result.stdout + result.stderr)
-    const metrics = await readJsonFile(join(runDirOf(file), "metrics.json"))
+    const metrics = await readJsonFile(join(await runDirOf(file), "metrics.json"))
     assert.equal(metrics.status, "ok")
     assert.deepEqual(metrics.fixed, { stable_pass: 0, broken: 1, flaky: 0, skipped: 0 })
     assert.deepEqual(metrics.buggy, { revealing: 0, flaky_on_buggy: 0, not_revealing: 0 })
@@ -467,6 +455,20 @@ describe("atg run with a fake agent", () => {
     assert.deepEqual([metrics.bugs.tested, metrics.bugs.detected], [2, 0])
     assert.deepEqual([metrics.repetition_ms.buggy, metrics.repetition_ms.bugs], [[], { counter: [], help: [] }])
   })
+})
+
+test("help lists the four commands and their flags", () => {
+  const help = (...args: string[]) => spawnSync(process.execPath, [atg, ...args, "--help"], { encoding: "utf8" }).stdout
+  assert.match(help(), /run[\s\S]*eval[\s\S]*signal[\s\S]*pilot/)
+  const flags = {
+    run: ["--dry-run", "--force", "--runs-dir <dir>", "--keep-workspace", "--reruns <n>"],
+    eval: ["--only <stage>", "--reruns <n>", "--runs-dir <dir>"],
+    signal: [],
+    pilot: ["--runs-dir <dir>", "--concurrency <n>"],
+  }
+  for (const [command, expected] of Object.entries(flags)) {
+    for (const flag of expected) assert.ok(help(command).includes(flag), `${command} --help lacks ${flag}`)
+  }
 })
 
 describe("app runtime", () => {
@@ -533,7 +535,7 @@ describe("atg run --dry-run on a real agent config", () => {
     assert.match(await readFile(join(workspace, "code", "public", "app.js"), "utf8"), /input:not\(:checked\)/)
     assert.doesNotMatch(result.stdout, /coverage/)
     assert.doesNotMatch(await readFile(join(workspace, "playwright.config.ts"), "utf8"), /localhost/)
-    const runDir = runDirOf(file)
+    const runDir = await runDirOf(file)
     const prompt = await readFile(join(runDir, "prompt.md"), "utf8")
     assert.doesNotMatch(prompt, /localhost|examples/)
     assert.match(prompt, /`stories\.md`[\s\S]*`code\/`/)
@@ -553,8 +555,15 @@ describe("atg run --dry-run on a real agent config", () => {
     t.after(() => rm(workspace, { recursive: true, force: true }))
     const command = join(workspace, "coverage")
     assert.equal(statSync(command).mode & 0o111, 0o111, "the signal command is executable")
-    assert.match(await readFile(command, "utf8"), new RegExp(` signal ${runDirOf(file)}\n$`))
-    assert.match(await readFile(join(runDirOf(file), "prompt.md"), "utf8"), /Run `\.\/coverage`/)
+    assert.match(await readFile(command, "utf8"), new RegExp(` signal ${await runDirOf(file)}\n$`))
+    assert.match(await readFile(join(await runDirOf(file), "prompt.md"), "utf8"), /Run `\.\/coverage`/)
+  })
+
+  test("rejects a bad config with a readable error and a non-zero exit, before it prepares anything", async () => {
+    const file = await configFile("bad.json", { color: "red", coverage_signal: ["lines", "lines"] })
+    const result = atgRun([file, "--dry-run"])
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /is not a valid config\n[\s\S]*Unrecognized key: "color"[\s\S]*must not repeat an item\n {2}→ at coverage_signal/)
   })
 
   test("refuses a workspace inside the home folder, where parent CLAUDE.md files would reach the agent", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
-import { caught, caughtStrict, classify } from "../src/classify.ts"
+import { caught, caughtStrict, classify } from "../src/evaluate.ts"
 
 type Status = "passed" | "failed" | "flaky" | "skipped"
 

@@ -1,13 +1,10 @@
-import { log } from "@clack/prompts"
 import { existsSync, readFileSync, rmSync } from "node:fs"
-import { constants } from "node:os"
+import { mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { constants, tmpdir } from "node:os"
 import { join } from "node:path"
 import * as z from "zod"
-import { findApp, loadApps } from "./apps.ts"
-import { configSchema } from "./config.ts"
-import { readJson, writeJson } from "./json.ts"
+import { configSchema, findApp, loadApps } from "./config.ts"
 import { killAll } from "./process.ts"
-import { removeTempDirs } from "./temp.ts"
 
 export const runFiles = {
   config: "config.json",
@@ -34,7 +31,9 @@ export const stagesSchema = z.record(z.string(), z.object({ ms: z.number(), erro
 
 const stopSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"]
 
-export const progress = { output: process.stderr }
+const tempDirs = new Set<string>()
+
+process.once("exit", removeTempDirs)
 
 export async function readRun(runDir: string) {
   const apps = await loadApps()
@@ -51,7 +50,7 @@ export async function mergeEnv(runDir: string, fields: Record<string, unknown>) 
 }
 
 export async function runStage(runDir: string, name: string, work: () => Promise<void>) {
-  log.info(name, progress)
+  console.error(name)
   const started = performance.now()
   const error = await work().then(
     () => undefined,
@@ -62,8 +61,7 @@ export async function runStage(runDir: string, name: string, work: () => Promise
   const stages = existsSync(file) ? stagesSchema.parse(await readJson(file)) : {}
   stages[name] = { ms, error }
   await writeJson(file, stages)
-  if (error === undefined) log.success(`${name} ${duration(ms)}`, { ...progress, spacing: 0 })
-  else log.error(`${name} failed after ${duration(ms)}: ${error}`, { ...progress, spacing: 0 })
+  console.error(error === undefined ? `${name} ${duration(ms)}` : `${name} failed after ${duration(ms)}: ${error}`)
   return error
 }
 
@@ -91,4 +89,28 @@ export function removeWorkspace(runDir: string) {
     const env = JSON.parse(readFileSync(join(runDir, runFiles.env), "utf8"))
     rmSync(z.object({ workspace: z.string() }).parse(env).workspace, { recursive: true, force: true })
   } catch {}
+}
+
+export async function readJson(file: string): Promise<unknown> {
+  const text = await readFile(file, "utf8")
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    throw new Error(`${file} is not valid JSON: ${error}`)
+  }
+}
+
+export async function writeJson(file: string, value: unknown) {
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`)
+}
+
+export async function tempDir(prefix: string) {
+  const dir = await mkdtemp(join(tmpdir(), prefix))
+  tempDirs.add(dir)
+  return dir
+}
+
+function removeTempDirs() {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true })
+  tempDirs.clear()
 }

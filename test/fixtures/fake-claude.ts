@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process"
 import { mkdir, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 const header = `import { expect, test } from "@playwright/test"
@@ -44,7 +45,14 @@ test("fails on every second run", async ({ page }) => {
 })
 `
 
-const mode = process.argv[2]
+const usage = { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0, costBasis: "fake" }
+
+if (process.argv.includes("--version")) {
+  console.log("fake 1.0")
+  process.exit()
+}
+
+const mode = process.argv[process.argv.indexOf("--model") + 1]
 await mkdir("tests", { recursive: true })
 
 if (mode === "hang") {
@@ -73,5 +81,7 @@ if (mode === "slow") {
   await sleep(3000)
 }
 
-await writeFile("tests/todo.spec.ts", suites[mode] ?? suite)
-console.log("suite written")
+const file = join(process.cwd(), "tests", "todo.spec.ts")
+await writeFile(file, suites[mode] ?? suite)
+console.log(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Write", input: { file_path: file } }] } }))
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 3, modelUsage: { "fake-model": usage } }))

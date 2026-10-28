@@ -3,12 +3,32 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import * as z from "zod"
-import { check } from "../check.ts"
-import type { AgentAdapter, AgentOutput, AgentResult, Invocation } from "../registries.ts"
+import type { Config } from "./config.ts"
 
 const exec = promisify(execFile)
 
 const finishingStops = ["success", "error_max_turns", "error_max_budget_usd"]
+
+export const agentResultSchema = z.object({
+  status: z.enum(["ok", "agent_error", "timeout"]),
+  stop_reason: z.string().optional(),
+  error: z.string().optional(),
+  turns: z.number().optional(),
+  duration_ms: z.number().optional(),
+  api_duration_ms: z.number().optional(),
+  tokens: z
+    .object({ input: z.number(), output: z.number(), cache_read: z.number(), cache_creation: z.number() })
+    .optional(),
+  cost_usd: z.number().optional(),
+  cost_source: z.string().optional(),
+  models: z.array(z.string()).optional(),
+})
+
+export type AgentResult = z.infer<typeof agentResultSchema>
+
+export type Invocation = { command: string; args: string[]; env: Record<string, string>; isolation: string }
+
+type Output = { stdout: string; stderr: string; code: number | null; error?: string }
 
 const usageSchema = z.object({
   inputTokens: z.number(),
@@ -43,41 +63,33 @@ const toolCallSchema = z.object({
   input: z.object({ file_path: z.string(), command: z.string(), pattern: z.string() }).partial(),
 })
 
-export const claude: AgentAdapter = {
-  invocation({ agent, commands }) {
-    const { isolation, args, env } = isolate()
-    return {
-      command: "claude",
-      args: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--model",
-        agent.model,
-        ...(agent.max_turns === undefined ? [] : ["--max-turns", String(agent.max_turns)]),
-        ...(agent.max_budget_usd === undefined ? [] : ["--max-budget-usd", String(agent.max_budget_usd)]),
-        "--permission-mode",
-        "dontAsk",
-        "--allowedTools",
-        "Read(./**)",
-        "Edit(./**)",
-        "Write(./**)",
-        ...commands.flatMap(command => [`Bash(${command})`, `Bash(${command} *)`]),
-        "--no-session-persistence",
-        "--strict-mcp-config",
-        ...args,
-      ],
-      env,
-      isolation,
-    }
-  },
-  parse,
-  activity,
-  version,
-  async checks() {
-    return [await check("Claude CLI", version), await check("Claude isolation", isolationAvailable)]
-  },
+export function invocation(agent: Config["agent"], commands: string[]): Invocation {
+  const { isolation, args, env } = isolate()
+  return {
+    command: "claude",
+    args: [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      agent.model,
+      ...(agent.max_turns === undefined ? [] : ["--max-turns", String(agent.max_turns)]),
+      ...(agent.max_budget_usd === undefined ? [] : ["--max-budget-usd", String(agent.max_budget_usd)]),
+      "--permission-mode",
+      "dontAsk",
+      "--allowedTools",
+      "Read(./**)",
+      "Edit(./**)",
+      "Write(./**)",
+      ...commands.flatMap(command => [`Bash(${command})`, `Bash(${command} *)`]),
+      "--no-session-persistence",
+      "--strict-mcp-config",
+      ...args,
+    ],
+    env,
+    isolation,
+  }
 }
 
 function isolate(): Pick<Invocation, "isolation" | "args" | "env"> {
@@ -87,7 +99,7 @@ function isolate(): Pick<Invocation, "isolation" | "args" | "env"> {
   return { isolation: "settings", args: ["--setting-sources", "", "--settings", JSON.stringify(settings)], env: {} }
 }
 
-function parse({ stdout, stderr, code, error }: AgentOutput): AgentResult {
+export function parse({ stdout, stderr, code, error }: Output): AgentResult {
   const lastLine = stdout.trim().split("\n").at(-1) ?? ""
   const parsed = resultSchema.safeParse(jsonOrNothing(lastLine))
   if (!parsed.success) {
@@ -117,7 +129,7 @@ function parse({ stdout, stderr, code, error }: AgentOutput): AgentResult {
   }
 }
 
-function activity(line: string) {
+export function activity(line: string) {
   const event = assistantSchema.safeParse(jsonOrNothing(line))
   if (!event.success) return undefined
   const calls = event.data.message.content.flatMap(block => {
@@ -132,17 +144,9 @@ function describeCall({ name, input }: z.infer<typeof toolCallSchema>) {
   return target === undefined ? name : `${name} ${target}`
 }
 
-async function version() {
+export async function version() {
   const { stdout } = await exec("claude", ["--version"])
   return stdout.trim()
-}
-
-async function isolationAvailable() {
-  if (process.env.ANTHROPIC_API_KEY) return "bare mode, ANTHROPIC_API_KEY is set"
-  const { stdout } = await exec("claude", ["auth", "status", "--json"]).catch(() => ({ stdout: "" }))
-  const status = z.object({ loggedIn: z.literal(true), authMethod: z.string() }).safeParse(jsonOrNothing(stdout))
-  if (!status.success) throw new Error("no ANTHROPIC_API_KEY and no subscription login (run: claude auth login)")
-  return `settings mode, subscription login (${status.data.authMethod})`
 }
 
 function jsonOrNothing(text: string): unknown {

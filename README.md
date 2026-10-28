@@ -1,54 +1,31 @@
 # atg
 
-atg measures how well a coding agent writes end-to-end tests for a web app. Today it works with Claude Code and Playwright.
+atg measures how well a coding agent writes end-to-end tests for a web app. atg gives Claude Code a new, empty folder and the inputs that a config selects, and Claude Code writes Playwright tests. Then atg runs the tests R times on the correct version of the app (`fixed`). It also runs them on a version with known bugs (`buggy`) and on one version for each bug. A test that passes every time on `fixed` and fails every time on `buggy` finds the bug. atg also measures the lines of browser code that the tests run. All results go to `runs/<run_id>/`.
 
-## How it works
-
-1. You write a config. It names the app, the agent, the model and what the agent gets about the app.
-2. atg gives the agent a new, empty folder with those inputs. The agent writes Playwright tests.
-3. atg runs the tests 3 times on the correct version of the app (`fixed`).
-4. atg runs the tests 3 times on a version of the app that has a known bug (`buggy`).
-5. A test that passes every time on `fixed` and fails every time on `buggy` finds the bug.
-6. atg also measures which lines of the app's browser code the tests run (line coverage).
-7. atg writes all results to `runs/<run_id>/`. The main file is `metrics.json`.
-
-## Setup
+## Commands
 
 You need Node 24 or later. There is no build step.
 
 ```sh
 npm install
 npx playwright install --only-shell chromium
-node src/cli.ts doctor
+npm test
 ```
-
-`atg doctor` shows what is missing. It never calls a model. To put `atg` on your PATH, run `npm link`.
-
-## Quick start
-
-```sh
-atg apps
-atg new
-atg run my-config.json --dry-run
-atg run my-config.json
-```
-
-`atg apps` lists the apps. `atg new` makes a config with a wizard. `--dry-run` shows the agent command and spends no money. The last command does the full run.
-
-## Commands
 
 | Command | What it does |
 | --- | --- |
-| `atg new` | Makes a config with a wizard. |
-| `atg validate <config...>` | Checks configs and prints the `run_id` of each one. |
-| `atg run <config>` | Does one run: the agent writes the tests, then atg evaluates them. |
-| `atg eval <run_id>` | Evaluates the saved tests of a run again. It does not call the agent. |
+| `atg run <config>` | Does one run: Claude Code writes the tests, then atg evaluates them and writes `metrics.json`. |
+| `atg run <config> --dry-run` | Makes sure that the config is correct, prepares the workspace and the prompt, and prints the `run_id` and the agent command. It does not call the agent. |
+| `atg eval <run_id>` | Evaluates the saved tests of a run again, without the agent. `--only <stage>` does one stage: `fixed`, `buggy`, `bugs` or `coverage`. |
+| `atg signal <run_dir>` | Runs the workspace tests of a run on the fixed app and prints the line coverage. The agent uses it through `./coverage`. |
 | `atg pilot <run_id>` | Prints the cost of one run and an estimate for the full grid of 11,520 runs. |
-| `atg apps` | Lists the apps and the inputs that each app gives. |
-| `atg schema` | Prints the config JSON Schema. |
-| `atg doctor` | Makes sure that the agent, Playwright and the apps are ready. |
 
-`atg <command> --help` shows the options. On `run` and `eval`, `--reruns <n>` sets how many times the tests run on each version. The default is 3.
+`--reruns <n>` on `run` and `eval` sets R. The default is 3. `atg <command> --help` shows all options. To put `atg` on your PATH, run `npm link`.
+
+- If `runs/<run_id>/metrics.json` exists, `atg run` does nothing. `--force` does the run again.
+- If a run stops after the agent finished, use `atg eval <run_id>`. `atg run` deletes the run folder and calls the agent again.
+- All versions of an app use the same `url`. Thus, a second run of an app waits until the first run is done.
+- The agent cannot see your `CLAUDE.md`, your memory or your plugins. But atg is not a sandbox: the tests are Node code, and they can read your files.
 
 ## Config
 
@@ -67,19 +44,31 @@ atg run my-config.json
 
 | Field | Meaning |
 | --- | --- |
-| `app` | An app from `atg apps`. |
-| `inputs` | What the agent gets: `url` (the running app), `task` (user stories), `examples` (example tests) and `code` (source code). It can be empty. |
-| `agent` | The agent `name` and `model`. `max_turns` and `max_budget_usd` are optional limits. |
-| `framework` | Only `playwright` works today. |
-| `coverage_signal` | `["lines"]` lets the agent see its line coverage while it works. `[]` hides it. atg always measures coverage at the end. |
+| `app` | A folder in `apps/`. Each app has an `app.json`, for example `apps/demo-todo/app.json`. |
+| `inputs` | What the agent gets: `url` (the running app), `task` (user stories), `examples` (example tests) and `code` (source code). The list can be empty. |
+| `agent` | `name` is `claude`. `model` is the Claude model. `max_turns` and `max_budget_usd` are optional limits. |
+| `framework` | `playwright`. |
+| `coverage_signal` | `["lines"]` lets the agent see its line coverage while it works. `[]` hides it. atg always measures the coverage at the end. |
 | `timeout_min` | The time limit of the agent, in minutes. The default is 30. |
 | `rep` | The repetition number. Use 1, 2 and 3 to do the same config three times. |
 
-The same config always gives the same `run_id`. If `runs/<run_id>/metrics.json` exists, `atg run` does nothing. `--force` does the run again.
+The `run_id` is `<app>__claude__playwright__<hash>`. The hash comes from the config, the commits of the fixed and buggy versions, and the prompt template `src/prompt.md`. Thus, the same config always gives the same `run_id`.
 
-## Results
+## Run folder
 
-`metrics.json` gives the status, the cost, the tokens, the verdicts and the coverage of a run.
+| File | Content |
+| --- | --- |
+| `config.json` | The config, with its defaults. |
+| `prompt.md` | The prompt that the agent got. |
+| `env.json` | The versions of atg, Node, the OS, Claude Code, Playwright and Chromium, the app commits, the agent command, R and the start and end times. |
+| `stages.json` | The time and the error of each stage. |
+| `agent.json`, `agent-stdout.txt`, `agent-stderr.txt` | The agent result and its output. |
+| `tests/` | The tests that the agent wrote. |
+| `results/fixed/`, `results/buggy/`, `results/bugs/<id>/` | The result of each repetition on each version, with its reports and logs. |
+| `results/verdicts.json` | The verdict of each test on each version. |
+| `results/coverage/` | The line coverage report and `summary.json`. |
+| `signal-calls.jsonl` | One line for each time that the agent used `./coverage`. |
+| `metrics.json` | The status, the cost, the tokens, the times, the verdict counts, `caught`, `caught_strict`, the bugs found and the coverage. atg writes it last. |
 
 | Status | Meaning |
 | --- | --- |
@@ -87,8 +76,6 @@ The same config always gives the same `run_id`. If `runs/<run_id>/metrics.json` 
 | `agent_error` | The agent failed, for example because of a login error. |
 | `infra_error` | atg, the app or the browser failed. The results that atg did not get are `null`. |
 | `timeout` | The agent used all of `timeout_min`. atg evaluates the tests that the agent left. |
-
-Each test gets a verdict on each version:
 
 | Version | Verdict | Meaning |
 | --- | --- | --- |
@@ -100,52 +87,4 @@ Each test gets a verdict on each version:
 | `buggy` | `flaky_on_buggy` | The test fails some times. |
 | `buggy` | `not_revealing` | The test never fails. |
 
-`caught` is true when one or more tests are `revealing`. `caught_strict` also needs every test to be `stable_pass`, with no two tests that have the same name. The paper has not selected its rule, so atg gives both.
-
-## Apps
-
-Each app has a folder `apps/<id>/` with an `app.json`:
-
-```json
-{
-  "id": "demo-todo",
-  "repo": "repo.bundle",
-  "url": "http://localhost:4173",
-  "start": "node server.mjs",
-  "fixed_ref": "v1.0.0",
-  "buggy_ref": "v1.0.0-buggy",
-  "code_dir": ".",
-  "browser_dir": "public",
-  "stories_file": "stories.md",
-  "examples_dir": "examples",
-  "bugs": [{ "id": "counter", "ref": "v1.0.0-bug-counter", "description": "The left counter also counts todos that are done." }]
-}
-```
-
-`repo`, `url`, `start`, `fixed_ref` and `buggy_ref` are necessary. atg starts each version of the app with `start` and tests it at `url`. The other fields are optional:
-
-- `code_dir`, `stories_file` and `examples_dir` give the `code`, `task` and `examples` inputs.
-- `browser_dir` is the folder of browser code. Without it, atg does not measure line coverage.
-- `bugs` lists one version for each bug. atg tests each version, to show which bugs the tests find.
-
-`demo-todo` and `demo-blog` are small apps for the tests and for demos.
-
-## Know before you run
-
-- All versions of an app use the same `url`. Thus, atg does only one run of an app at a time. A second run of the same app waits until the first run is done. Runs of apps with different urls can go at the same time.
-- If you stop a run after the agent finished, do not use `atg run` again. It deletes the run folder and calls the agent again. Use `atg eval <run_id>`. It keeps the tests that the agent wrote.
-- The agent cannot see your `CLAUDE.md`, your memory or your plugins. It gets no tokens other than its own API key. But atg is not a sandbox. The tests are Node code, and they can read your files.
-- Each time the tests run, they have their own limit of `timeout_min`. The evaluation runs them R × (2 + number of bugs) + 1 times. With R = 3, two bugs and 30 minutes, one run can take up to about 6.7 hours.
-
-## Tests
-
-```sh
-npm test
-npm run typecheck
-```
-
-The tests use a fake agent, so they spend no money.
-
-## More details
-
-[docs/reference.md](docs/reference.md) gives every command option, each stage of a run, each file in the run folder, the agent isolation, the coverage tools, the bug-finding rules and the cost pilot.
+`caught` is true when one or more tests are `revealing`. `caught_strict` also needs every test to be `stable_pass`, with no two tests that have the same name. The rule for the paper is not decided, so atg gives both.

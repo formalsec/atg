@@ -1,14 +1,14 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
+import { readFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, test } from "node:test"
 import * as z from "zod"
-import { appSchema, findApp, loadApps } from "../src/apps.ts"
-import { configSchema } from "../src/config.ts"
-import { resolveVersions } from "../src/repo.ts"
-import { identify, runId } from "../src/run-id.ts"
+import { resolveVersions } from "../src/app.ts"
+import { appSchema, configSchema, findApp, loadApps, parseConfig, runId } from "../src/config.ts"
+import { identify } from "../src/run.ts"
 
 const apps = await loadApps()
 const schema = configSchema(apps)
@@ -50,18 +50,17 @@ describe("config schema", () => {
   })
 
   test("rejects a signal tool that is not implemented", () => {
-    assert.match(
-      errorOf({ ...base, coverage_signal: ["html", "lines"] }),
-      /coverage tool "html" is not implemented yet, so it cannot be a signal\n {2}→ at coverage_signal/,
-    )
+    assert.match(errorOf({ ...base, coverage_signal: ["html", "lines"] }), /Invalid input: expected "lines"\n {2}→ at coverage_signal\[0\]/)
   })
 
   test("rejects an unknown app", () => {
-    assert.match(errorOf({ ...base, app: "nope" }), /expected one of "demo-blog"\|"demo-todo"\n {2}→ at app/)
+    assert.match(errorOf({ ...base, app: "nope" }), /Invalid input: expected "demo-todo"\n {2}→ at app/)
   })
 
   test("rejects inputs the app does not provide", () => {
-    assert.match(errorOf({ ...base, app: "demo-blog" }), /app "demo-blog" does not provide "code"/)
+    const withoutCode = configSchema([{ ...findApp(apps, "demo-todo"), code_dir: undefined }])
+    const result = withoutCode.safeParse(base)
+    assert.match(result.error ? z.prettifyError(result.error) : "", /app "demo-todo" does not provide "code" \(it provides: url, task, examples\)/)
   })
 
   test("normalizes defaults and subset order", () => {
@@ -72,6 +71,17 @@ describe("config schema", () => {
       rep: 1,
     })
   })
+})
+
+test("the pilot config is Claude with all four inputs, every implemented signal tool, Playwright, rep 1 and a budget", () => {
+  const file = join(import.meta.dirname, "..", "configs", "pilot.json")
+  const config = parseConfig(apps, JSON.parse(readFileSync(file, "utf8")), file)
+  assert.equal(config.agent.name, "claude")
+  assert.ok((config.agent.max_budget_usd ?? 0) > 0)
+  assert.deepEqual(config.inputs, ["code", "examples", "task", "url"])
+  assert.deepEqual(config.coverage_signal, ["lines"])
+  assert.equal(config.framework, "playwright")
+  assert.equal(config.rep, 1)
 })
 
 describe("app schema", () => {
@@ -115,13 +125,10 @@ describe("run_id", () => {
 
   test("changes when any field changes", () => {
     const changes = [
-      { ...base, app: "demo-blog", inputs: ["url"] },
       { ...base, inputs: ["url"] },
-      { ...base, agent: { ...base.agent, name: "codex" } },
       { ...base, agent: { ...base.agent, model: "other-model" } },
       { ...base, agent: { ...base.agent, max_turns: 50 } },
       { ...base, agent: { ...base.agent, max_budget_usd: 5 } },
-      { ...base, framework: "cypress" },
       { ...base, coverage_signal: [] },
       { ...base, timeout_min: 45 },
       { ...base, rep: 2 },
