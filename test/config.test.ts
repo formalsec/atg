@@ -50,7 +50,7 @@ describe("config schema", () => {
   })
 
   test("rejects a signal tool that is not implemented", () => {
-    assert.match(errorOf({ ...base, coverage_signal: ["html", "lines"] }), /Invalid input: expected "lines"\n {2}→ at coverage_signal\[0\]/)
+    assert.match(errorOf({ ...base, coverage_signal: ["html", "lines"] }), /Invalid option: expected one of "lines"\|"api"\n {2}→ at coverage_signal\[0\]/)
   })
 
   test("rejects an unknown app", () => {
@@ -79,7 +79,7 @@ test("the pilot config is Claude with all four inputs, every implemented signal 
   assert.equal(config.agent.name, "claude")
   assert.ok((config.agent.max_budget_usd ?? 0) > 0)
   assert.deepEqual(config.inputs, ["code", "examples", "task", "url"])
-  assert.deepEqual(config.coverage_signal, ["lines"])
+  assert.deepEqual(config.coverage_signal, ["api", "lines"])
   assert.equal(config.framework, "playwright")
   assert.equal(config.rep, 1)
 })
@@ -94,6 +94,15 @@ describe("app schema", () => {
     assert.deepEqual(issues({ ...app, bugs: [{ ...bug, id: "../escape" }] }), ["use lowercase kebab-case"])
     assert.deepEqual(issues({ ...app, bugs: [bug, bug] }), ["bug ids must be unique"])
     assert.deepEqual(issues({ ...app, bugs: [] }), ["Too small: expected array to have >=1 items"])
+  })
+
+  test("accepts endpoints as METHOD /path with whole {parameters}, each once, and rejects others", () => {
+    const issues = (endpoints: string[]) => appSchema.safeParse({ ...app, endpoints }).error?.issues.map(issue => issue.message) ?? []
+    assert.deepEqual(issues(["GET /", "PATCH /api/todos/{id}", "GET /files/{name}.json"]), [])
+    for (const bad of ["get /api", "GET api", "GET /api/{id", "GET /api/{}", "GET /api /x"]) {
+      assert.deepEqual(issues([bad]), ["use METHOD /path, for example PATCH /api/todos/{id}"], bad)
+    }
+    assert.deepEqual(issues(["GET /", "GET /"]), ["endpoints must be unique"])
   })
 
   test("needs both a url and a start command, so atg starts every version itself", () => {
@@ -145,8 +154,8 @@ describe("run_id", () => {
 
   test("resolves the demo app refs to the commits in its bundle", async () => {
     assert.deepEqual(await resolveVersions(findApp(apps, "demo-todo")), {
-      fixed: "f61478d89c5fb5b07dc13f560690166b2c51b387",
-      buggy: "d4e812811cb1f4e053355079d4e241541abadce5",
+      fixed: "651e0df0bf46ec726a5b0509fea01435c37e66a6",
+      buggy: "81ecfaffd4886326f73354e2182b0f33dc05e08a",
     })
   })
 
