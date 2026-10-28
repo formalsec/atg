@@ -8,10 +8,10 @@
   "endpoints": ["POST /api/todos", "PATCH /api/todos/{id}", "DELETE /api/todos/{id}"],
   "stories_file": "stories.md",
   "examples_dir": "examples",
-  "fixed_ref": "v1.1.0",
-  "buggy_ref": "v1.1.0-buggy",
+  "fixed_ref": "v1.2.0",
+  "buggy_ref": "v1.2.0-buggy",
   "bugs": [
-    { "id": "counter", "ref": "v1.1.0-bug-counter", "description": "The left counter also counts todos that are done." },
-    { "id": "help", "ref": "v1.1.0-bug-help", "description": "Every question on the help page shows the answer to the first question." }
+    { "id": "counter", "ref": "v1.2.0-bug-counter", "description": "The left counter also counts todos that are done." },
+    { "id": "help", "ref": "v1.2.0-bug-help", "description": "Every question on the help page shows the answer to the first question." }
   ]
 }

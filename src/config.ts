@@ -92,7 +92,7 @@ export function configSchema(apps: App[]) {
         max_budget_usd: z.number().positive().optional(),
       }),
       framework: z.literal("playwright"),
-      coverage_signal: subset(["lines", "api"]),
+      coverage_signal: subset(["lines", "api", "html"]),
       timeout_min: z.number().positive().default(30),
       rep: z.int().positive().default(1),
     })

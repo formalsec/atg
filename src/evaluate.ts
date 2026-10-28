@@ -222,7 +222,7 @@ export async function finalize(runDir: string) {
   const bugRuns = await readIfThere(join(results, "bugs", repetitionsFile), z.record(z.string(), repetitionsSchema))
   const summary = await readIfThere(
     join(runDir, runFiles.coverage, coverageSummary),
-    z.object({ lines: coverageSchema.nullable(), api: coverageSchema.nullish() }),
+    z.object({ lines: coverageSchema.nullable(), api: coverageSchema.nullish(), html: coverageSchema.nullish() }),
   )
   const failed = Object.entries(stages).find(([, stage]) => stage.error !== undefined)
   const main = fixedRuns && classify(tests(fixedRuns), tests(buggyRuns ?? []))
@@ -256,7 +256,7 @@ export async function finalize(runDir: string) {
     caught_strict: main && buggyRuns ? caughtStrict(main) : null,
     not_caught_reason: main && buggyRuns && !caught(main.tests) ? notCaughtReason(main) : null,
     bugs: main && bugRuns ? detection(byBug) : null,
-    coverage: { lines: coverageBlock(summary?.lines), html: null, api: coverageBlock(summary?.api) },
+    coverage: { lines: coverageBlock(summary?.lines), html: coverageBlock(summary?.html), api: coverageBlock(summary?.api) },
     signal_calls: await countRecords(join(runDir, runFiles.signalCalls)),
   }
   await mergeEnv(runDir, { ended_at: new Date().toISOString() })

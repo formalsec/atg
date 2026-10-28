@@ -50,7 +50,7 @@ describe("config schema", () => {
   })
 
   test("rejects a signal tool that is not implemented", () => {
-    assert.match(errorOf({ ...base, coverage_signal: ["html", "lines"] }), /Invalid option: expected one of "lines"\|"api"\n {2}→ at coverage_signal\[0\]/)
+    assert.match(errorOf({ ...base, coverage_signal: ["branches", "lines"] }), /Invalid option: expected one of "lines"\|"api"\|"html"\n {2}→ at coverage_signal\[0\]/)
   })
 
   test("rejects an unknown app", () => {
@@ -79,7 +79,7 @@ test("the pilot config is Claude with all four inputs, every implemented signal 
   assert.equal(config.agent.name, "claude")
   assert.ok((config.agent.max_budget_usd ?? 0) > 0)
   assert.deepEqual(config.inputs, ["code", "examples", "task", "url"])
-  assert.deepEqual(config.coverage_signal, ["api", "lines"])
+  assert.deepEqual(config.coverage_signal, ["api", "html", "lines"])
   assert.equal(config.framework, "playwright")
   assert.equal(config.rep, 1)
 })
@@ -154,8 +154,8 @@ describe("run_id", () => {
 
   test("resolves the demo app refs to the commits in its bundle", async () => {
     assert.deepEqual(await resolveVersions(findApp(apps, "demo-todo")), {
-      fixed: "651e0df0bf46ec726a5b0509fea01435c37e66a6",
-      buggy: "81ecfaffd4886326f73354e2182b0f33dc05e08a",
+      fixed: "c7c42b2a23be1293e51197129a359b0f11bba640",
+      buggy: "65546168e35179b6bad825eee19714a18a2a5a37",
     })
   })
 

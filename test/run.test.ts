@@ -49,6 +49,7 @@ const requiredFiles = [
   "results/verdicts.json",
   "results/coverage/summary.json",
   "results/coverage/lines/index.html",
+  "results/coverage/html/report.json",
   "env.json",
   "metrics.json",
 ]
@@ -165,11 +166,13 @@ describe("atg run with a fake agent", () => {
     })
     assert.deepEqual(metrics.coverage, {
       lines: { covered: 33, total: 45, pct: 73.33, report: "results/coverage/lines/index.html" },
-      html: null,
+      html: { covered: 2, total: 4, pct: 50, report: "results/coverage/html/report.json" },
       api: { covered: 2, total: 3, pct: 66.67, report: "results/coverage/api/report.json" },
     })
     assert.equal(metrics.signal_calls, 0)
-    const { lines, api } = await readJsonFile(join(runDir, "results", "coverage", "summary.json"))
+    const { lines, api, html } = await readJsonFile(join(runDir, "results", "coverage", "summary.json"))
+    assert.deepEqual(html.uncovered, ['/ link "Help"', "/ listitem › button 1"])
+    assert.equal(existsSync(join(runDir, "results", "coverage", "html", "raw")), false)
     assert.ok(lines.uncovered.includes("public/help.js: 0.00 % of lines covered, uncovered lines 1-6"), lines.uncovered)
     assert.deepEqual(api.uncovered, ["DELETE /api/todos/{id}"])
     assert.deepEqual(await readJsonFile(join(runDir, metrics.coverage.api.report)), {
@@ -192,8 +195,8 @@ describe("atg run with a fake agent", () => {
     assert.notEqual(env.app.fixed.sha, env.app.buggy.sha)
     assert.deepEqual(env.evaluation, { protocol: 1, reruns: 3 })
     assert.deepEqual(env.bugs, [
-      { id: "counter", ref: "v1.1.0-bug-counter", sha: "6ae546ce3a18dc756d84599d638a8053f98209a1" },
-      { id: "help", ref: "v1.1.0-bug-help", sha: "4fbc2294bc5cc37b4960bfcb1da5a96e4ef9fa79" },
+      { id: "counter", ref: "v1.2.0-bug-counter", sha: "4d5080e8ad3cbe321c0593b43f3dd76f829b9408" },
+      { id: "help", ref: "v1.2.0-bug-help", sha: "6688773aa98a43f981be9a416d61d7454da7737c" },
     ])
     assert.ok(env.framework.versions.chromium)
     assert.equal(existsSync(env.workspace), false, "the workspace is removed")
@@ -234,7 +237,7 @@ describe("atg run with a fake agent", () => {
     const agentOutput = statSync(join(runDir, "agent-stdout.txt")).mtimeMs
     const result = atgIn(runs, "eval", basename(runDir), "--only", "coverage")
     assert.equal(result.status, 0, result.stdout + result.stderr)
-    assert.match(result.stdout, /coverage: lines 73\.33%, html not measured, api 66\.67%/)
+    assert.match(result.stdout, /coverage: lines 73\.33%, html 50%, api 66\.67%/)
     const after = await readJsonFile(join(runDir, "metrics.json"))
     assert.deepEqual(after.coverage, before.coverage)
     assert.deepEqual(after.fixed, before.fixed)
@@ -284,7 +287,7 @@ describe("atg run with a fake agent", () => {
       /^\| Tokens \| input 10, output 20, cache read 0, cache creation 0 \|$/m,
       /^\| Cost \| \$0\.00 \(estimate:fake\) \|$/m,
       /^\| Turns \| 3 \|$/m,
-      /^\| Coverage \| lines 73\.33% \(33 of 45\), html not measured, api 66\.67% \(2 of 3\) \|$/m,
+      /^\| Coverage \| lines 73\.33% \(33 of 45\), html 50% \(2 of 4\), api 66\.67% \(2 of 3\) \|$/m,
       /^## Bug finding$/m,
       /^\| Repetitions \| 1 per version, evaluation protocol 1 \|$/m,
       /^\| Tests on fixed \| 3 tests: 2 stable_pass, 1 broken, 0 flaky, 0 skipped \|$/m,
@@ -342,16 +345,17 @@ describe("atg run with a fake agent", () => {
     ])
   })
 
-  test("with coverage_signal [api], the signal prints the uncovered endpoints and no line coverage", async () => {
+  test("with coverage_signal [api, html], the signal prints the uncovered endpoints and elements and no line coverage", async () => {
     const file = await configFile("signal-api.json", {
       agent: { name: "claude", model: "signal" },
       inputs: ["task"],
-      coverage_signal: ["api"],
+      coverage_signal: ["api", "html"],
     })
     const result = atgRun([file, "--reruns", "1"])
     assert.equal(result.status, 0, result.stdout + result.stderr)
     const agentOutput = await readFile(join(await runDirOf(file), "agent-stdout.txt"), "utf8")
     assert.match(agentOutput, /^API endpoint coverage: 66\.67% \(2 of 3\)\n {2}DELETE \/api\/todos\/\{id\}$/m)
+    assert.match(agentOutput, /^HTML element coverage: 50% \(2 of 4\)\n {2}\/ link "Help"\n {2}\/ listitem › button 1$/m)
     assert.doesNotMatch(agentOutput, /line coverage/)
   })
 

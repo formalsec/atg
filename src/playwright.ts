@@ -144,7 +144,8 @@ const test = playwright.test.extend({
     const stops = []
     for (const { module, dir } of collectors) stops.push(await (await import(module)).collect(page, dir))
     await use(page)
-    for (const stop of stops) await stop()
+    const stopped = await Promise.allSettled(stops.map(stop => stop()))
+    for (const result of stopped) if (result.status === "rejected") throw result.reason
   },
 })
 

@@ -1,6 +1,6 @@
 # atg
 
-atg measures how well a coding agent writes end-to-end tests for a web app. atg gives Claude Code a new, empty folder and the inputs that a config selects, and Claude Code writes Playwright tests. Then atg runs the tests R times on the correct version of the app (`fixed`). It also runs them on a version with known bugs (`buggy`) and on one version for each bug. A test that passes every time on `fixed` and fails every time on `buggy` finds the bug. atg also measures the lines of browser code that the tests run and the API endpoints that they call. All results go to `runs/<run_id>/`.
+atg measures how well a coding agent writes end-to-end tests for a web app. atg gives Claude Code a new, empty folder and the inputs that a config selects, and Claude Code writes Playwright tests. Then atg runs the tests R times on the correct version of the app (`fixed`). It also runs them on a version with known bugs (`buggy`) and on one version for each bug. A test that passes every time on `fixed` and fails every time on `buggy` finds the bug. atg also measures the lines of browser code that the tests run, the API endpoints that they call and the interactive HTML elements that they act on. All results go to `runs/<run_id>/`.
 
 ## Commands
 
@@ -48,7 +48,7 @@ npm test
 | `inputs` | What the agent gets: `url` (the running app), `task` (user stories), `examples` (example tests) and `code` (source code). The list can be empty. |
 | `agent` | `name` is `claude`. `model` is the Claude model. `max_turns` and `max_budget_usd` are optional limits. |
 | `framework` | `playwright`. |
-| `coverage_signal` | `lines` lets the agent see its line coverage while it works. `api` lets it see its API endpoint coverage and the endpoints that it did not call. `[]` hides both. atg always measures both at the end. |
+| `coverage_signal` | `lines` lets the agent see its line coverage while it works. `api` lets it see its API endpoint coverage and the endpoints that it did not call. `html` lets it see its HTML element coverage and the elements that it did not act on. `[]` hides all. atg always measures all at the end. |
 | `timeout_min` | The time limit of the agent, in minutes. The default is 30. |
 | `rep` | The repetition number. Use 1, 2 and 3 to do the same config three times. |
 
@@ -64,6 +64,17 @@ The `endpoints` list in `app.json` is the denominator, for example `"PATCH /api/
 
 `api/report.json` lists all groups and the endpoints that are not covered. atg counts only the requests that a browser page sends. Requests from the `request` fixture of Playwright are not counted.
 
+## HTML element coverage
+
+The denominator is the elements with an interactive role in the ARIA snapshots (Playwright `ariaSnapshotJSON`) of the `coverage` stage. atg takes a snapshot before each action and when each test ends. Thus the denominator comes from the suite: if no test opens a page, the elements of that page are not in it. The interactive roles are the WAI-ARIA 1.2 widget roles that a user operates: button, checkbox, combobox, link, listbox, menuitem, menuitemcheckbox, menuitemradio, radio, searchbox, slider, spinbutton, switch, tab, textbox and treeitem.
+
+- An element is its route (the path, without query or hash), its role and its accessible name, for example `/ button "Clear"`. `getByRole` uses the same identity.
+- Inside a list item or a table row, the name is not used. The element is the item role, its role and its position in the item, for example `/ listitem › checkbox 1`. Thus all rows are one row, and the titles that a test types do not add elements.
+- An element is covered when one of these actions on it succeeds, from a locator or from `page`: `check`, `uncheck`, `setChecked`, `click`, `dblclick`, `tap`, `fill`, `clear`, `press`, `pressSequentially`, `selectOption`, `setInputFiles` and `dragTo`. Playwright finds the target, so a CSS, text or role locator gives the same element. If the target has no interactive role, the action counts for its nearest interactive ancestor, or else for its only interactive descendant, for example the checkbox in a label.
+- These do not count: `page.mouse` and `page.keyboard`, element handles, trial actions, failed actions and other origins. atg does not see a click listener on an element that has no interactive role, for example a `div` with `onclick`. For this reason, the help questions of demo-todo are buttons.
+
+`html/report.json` gives these rules, the covered and uncovered elements of each route, and the actions that atg could not connect to an element (`ignored`).
+
 ## Run folder
 
 | File | Content |
@@ -76,7 +87,7 @@ The `endpoints` list in `app.json` is the denominator, for example `"PATCH /api/
 | `tests/` | The tests that the agent wrote. |
 | `results/fixed/`, `results/buggy/`, `results/bugs/<id>/` | The result of each repetition on each version, with its reports and logs. |
 | `results/verdicts.json` | The verdict of each test on each version. |
-| `results/coverage/` | The line coverage report, the API report `api/report.json` and `summary.json`. |
+| `results/coverage/` | The line coverage report, the API report `api/report.json`, the HTML element report `html/report.json` and `summary.json`. |
 | `signal-calls.jsonl` | One line for each time that the agent used `./coverage`. |
 | `metrics.json` | The status, the cost, the tokens, the times, the verdict counts, `caught`, `caught_strict`, the bugs found and the coverage. atg writes it last. |
 
