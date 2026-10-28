@@ -17,6 +17,11 @@ export const appSchema = z.strictObject({
   start: z.string().min(1),
   code_dir: z.string().min(1).optional(),
   browser_dir: z.string().min(1).optional(),
+  endpoints: z
+    .array(z.string().regex(/^[A-Z]+ (\/([^/{}\s]|\{[^/{}\s]+\})*)+$/, "use METHOD /path, for example PATCH /api/todos/{id}"))
+    .min(1)
+    .refine(endpoints => new Set(endpoints).size === endpoints.length, "endpoints must be unique")
+    .optional(),
   stories_file: z.string().min(1).optional(),
   examples_dir: z.string().min(1).optional(),
   fixed_ref: z.string().min(1),
@@ -87,7 +92,7 @@ export function configSchema(apps: App[]) {
         max_budget_usd: z.number().positive().optional(),
       }),
       framework: z.literal("playwright"),
-      coverage_signal: subset(["lines"]),
+      coverage_signal: subset(["lines", "api"]),
       timeout_min: z.number().positive().default(30),
       rep: z.int().positive().default(1),
     })

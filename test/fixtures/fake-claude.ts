@@ -30,6 +30,15 @@ test("counts what is left after a todo is done", async ({ page }) => {
 const failsOnPurpose = `
 test("fails on purpose", async ({ page }) => {
   await page.goto("/")
+  await page.route("**/api/todos/1", route => route.fulfill({ json: {} }))
+  await page.route("**/api/todos/2", route => route.abort())
+  await page.evaluate(() =>
+    Promise.all([
+      fetch("/api/stats"),
+      fetch("/api/todos/1", { method: "DELETE" }),
+      fetch("/api/todos/2", { method: "DELETE" }).catch(() => {}),
+    ]),
+  )
   await expect(page.getByText("7 left")).toBeVisible({ timeout: 500 })
 })
 `

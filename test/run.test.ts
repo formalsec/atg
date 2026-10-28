@@ -164,21 +164,36 @@ describe("atg run with a fake agent", () => {
       ],
     })
     assert.deepEqual(metrics.coverage, {
-      lines: { covered: 20, total: 27, pct: 74.07, report: "results/coverage/lines/index.html" },
+      lines: { covered: 33, total: 45, pct: 73.33, report: "results/coverage/lines/index.html" },
       html: null,
-      api: null,
+      api: { covered: 2, total: 3, pct: 66.67, report: "results/coverage/api/report.json" },
     })
     assert.equal(metrics.signal_calls, 0)
-    const { lines } = await readJsonFile(join(runDir, "results", "coverage", "summary.json"))
+    const { lines, api } = await readJsonFile(join(runDir, "results", "coverage", "summary.json"))
     assert.ok(lines.uncovered.includes("public/help.js: 0.00 % of lines covered, uncovered lines 1-6"), lines.uncovered)
+    assert.deepEqual(api.uncovered, ["DELETE /api/todos/{id}"])
+    assert.deepEqual(await readJsonFile(join(runDir, metrics.coverage.api.report)), {
+      endpoints: ["DELETE /api/todos/{id}", "PATCH /api/todos/{id}", "POST /api/todos"],
+      covered: ["PATCH /api/todos/{id}", "POST /api/todos"],
+      uncovered: ["DELETE /api/todos/{id}"],
+      unmatched: ["GET /api/stats"],
+      ignored: [
+        "DELETE http://localhost:4173/api/todos/1 (not served by the app)",
+        "DELETE http://localhost:4173/api/todos/2 (failed: net::ERR_FAILED)",
+        "GET http://localhost:4173/ (document)",
+        "GET http://localhost:4173/app.js (script)",
+        "GET http://localhost:4173/style.css (stylesheet)",
+      ],
+    })
+    assert.equal(existsSync(join(runDir, "results", "coverage", "api", "raw")), false)
     assert.doesNotMatch(await readFile(join(runDir, "prompt.md"), "utf8"), /coverage/)
     const env = await readJsonFile(join(runDir, "env.json"))
     assert.match(env.app.fixed.sha, /^[0-9a-f]{40}$/)
     assert.notEqual(env.app.fixed.sha, env.app.buggy.sha)
     assert.deepEqual(env.evaluation, { protocol: 1, reruns: 3 })
     assert.deepEqual(env.bugs, [
-      { id: "counter", ref: "v1.0.0-bug-counter", sha: "b093525ac628b7701a402bb664306f553fbd1c2c" },
-      { id: "help", ref: "v1.0.0-bug-help", sha: "3784d91782f3e4ed0d86341b35a935614d46d9f4" },
+      { id: "counter", ref: "v1.1.0-bug-counter", sha: "6ae546ce3a18dc756d84599d638a8053f98209a1" },
+      { id: "help", ref: "v1.1.0-bug-help", sha: "4fbc2294bc5cc37b4960bfcb1da5a96e4ef9fa79" },
     ])
     assert.ok(env.framework.versions.chromium)
     assert.equal(existsSync(env.workspace), false, "the workspace is removed")
@@ -219,7 +234,7 @@ describe("atg run with a fake agent", () => {
     const agentOutput = statSync(join(runDir, "agent-stdout.txt")).mtimeMs
     const result = atgIn(runs, "eval", basename(runDir), "--only", "coverage")
     assert.equal(result.status, 0, result.stdout + result.stderr)
-    assert.match(result.stdout, /coverage: lines 74\.07%, html not measured, api not measured/)
+    assert.match(result.stdout, /coverage: lines 73\.33%, html not measured, api 66\.67%/)
     const after = await readJsonFile(join(runDir, "metrics.json"))
     assert.deepEqual(after.coverage, before.coverage)
     assert.deepEqual(after.fixed, before.fixed)
@@ -269,7 +284,7 @@ describe("atg run with a fake agent", () => {
       /^\| Tokens \| input 10, output 20, cache read 0, cache creation 0 \|$/m,
       /^\| Cost \| \$0\.00 \(estimate:fake\) \|$/m,
       /^\| Turns \| 3 \|$/m,
-      /^\| Coverage \| lines 74\.07% \(20 of 27\), html not measured, api not measured \|$/m,
+      /^\| Coverage \| lines 73\.33% \(33 of 45\), html not measured, api 66\.67% \(2 of 3\) \|$/m,
       /^## Bug finding$/m,
       /^\| Repetitions \| 1 per version, evaluation protocol 1 \|$/m,
       /^\| Tests on fixed \| 3 tests: 2 stable_pass, 1 broken, 0 flaky, 0 skipped \|$/m,
@@ -303,12 +318,13 @@ describe("atg run with a fake agent", () => {
     assert.match(await readFile(join(runDir, "prompt.md"), "utf8"), /Run `\.\/coverage` to measure your current tests/)
     const agentOutput = await readFile(join(runDir, "agent-stdout.txt"), "utf8")
     assert.match(agentOutput, /^app answers false$/m)
-    assert.match(agentOutput, /^Browser-side line coverage: 74\.07% \(20 of 27\)$/m)
+    assert.match(agentOutput, /^Browser-side line coverage: 73\.33% \(33 of 45\)$/m)
     assert.match(agentOutput, /^ {2}public\/help\.js: 0\.00 % of lines covered, uncovered lines 1-6$/m)
+    assert.doesNotMatch(agentOutput, /API endpoint coverage/)
     const metrics = await readJsonFile(join(runDir, "metrics.json"))
     assert.equal(metrics.status, "ok")
     assert.equal(metrics.signal_calls, 1)
-    assert.equal(metrics.coverage.lines.pct, 74.07)
+    assert.equal(metrics.coverage.lines.pct, 73.33)
     assert.deepEqual((await readdir(runDir)).toSorted(), [
       "agent-stderr.txt",
       "agent-stdout.txt",
@@ -324,6 +340,19 @@ describe("atg run with a fake agent", () => {
       "stages.json",
       "tests",
     ])
+  })
+
+  test("with coverage_signal [api], the signal prints the uncovered endpoints and no line coverage", async () => {
+    const file = await configFile("signal-api.json", {
+      agent: { name: "claude", model: "signal" },
+      inputs: ["task"],
+      coverage_signal: ["api"],
+    })
+    const result = atgRun([file, "--reruns", "1"])
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    const agentOutput = await readFile(join(await runDirOf(file), "agent-stdout.txt"), "utf8")
+    assert.match(agentOutput, /^API endpoint coverage: 66\.67% \(2 of 3\)\n {2}DELETE \/api\/todos\/\{id\}$/m)
+    assert.doesNotMatch(agentOutput, /line coverage/)
   })
 
   test("killed mid-run, it leaves no process behind and a re-run starts clean", async () => {
