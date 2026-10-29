@@ -4,6 +4,7 @@ import { join, resolve } from "node:path"
 import * as z from "zod"
 import { holdUrl, resolveRefs, startApp } from "./app.ts"
 import { agentResultSchema } from "./claude.ts"
+import type { App } from "./config.ts"
 import { type Coverage, coverage, coverageSchema, coverageSummary } from "./coverage.ts"
 import * as playwright from "./playwright.ts"
 import { mergeEnv, readJson, readRun, runFiles, runStage, stagesSchema, stopOnSignals, writeJson } from "./run-folder.ts"
@@ -36,11 +37,29 @@ type Verdict = {
 
 type Classification = { tests: Verdict[]; duplicates: string[] }
 
-export const evaluationStages: Record<string, (runDir: string, reruns: number) => Promise<void>> = {
-  fixed,
-  buggy,
-  bugs,
-  coverage,
+type Stage = { purpose: (reruns: number) => string; run: (runDir: string, reruns: number) => Promise<void> }
+
+export const evaluationStages: Record<string, Stage> = {
+  fixed: {
+    purpose: reruns => `run every test ${plural(reruns, "time")} on the correct app, to keep only the tests that always pass`,
+    run: fixed,
+  },
+  buggy: {
+    purpose: reruns =>
+      `run those tests ${plural(reruns, "time")} on the app with all known bugs, a test that catches a bug waits for its timeout, so this is slower`,
+    run: buggy,
+  },
+  bugs: { purpose: reruns => `run those tests ${plural(reruns, "time")} on each app that has only one of the known bugs`, run: bugs },
+  coverage: { purpose: () => "run the tests once more, to measure how much of the app they reach", run: coverage },
+}
+
+const outcomes: Record<string, string> = {
+  success: "the agent finished its work",
+  error_max_turns: "the agent stopped at its turn limit",
+  error_max_budget_usd: "the agent stopped at its budget limit",
+  agent_error: "the agent failed",
+  infra_error: "atg, the app or the browser failed",
+  timeout: "the agent ran out of time, atg checked the tests it left",
 }
 
 type Options = { only?: string; reruns: number; runsDir: string }
@@ -53,43 +72,85 @@ export async function evaluateRun(runId: string, options: Options) {
     throw new Error(`run ${runId} has no suite to evaluate: its generate stage did not finish in ${runDir}`)
   }
   stopOnSignals(runDir, true)
-  const release = await holdUrl((await readRun(runDir)).app.url)
+  const { app } = await readRun(runDir)
+  const release = await holdUrl(app.url)
   try {
     await runEvaluation(runDir, options.only ? [options.only] : Object.keys(evaluationStages), options.reruns)
   } finally {
     await release()
   }
   const metrics = await finalize(runDir)
-  printMetrics(runId, runDir, metrics)
+  printMetrics(runId, runDir, metrics, app)
   if (metrics.status === "infra_error") process.exitCode = 1
 }
 
 export async function runEvaluation(runDir: string, names: string[], reruns: number) {
   for (const name of names) {
-    if (await runStage(runDir, name, () => evaluationStages[name](runDir, reruns))) return
+    const stage = evaluationStages[name]
+    if (await runStage(runDir, name, stage.purpose(reruns), () => stage.run(runDir, reruns))) return
   }
 }
 
-export function printMetrics(id: string, runDir: string, metrics: Metrics) {
-  const { fixed, buggy, bugs } = metrics
-  const measured = Object.entries(metrics.coverage).map(([name, block]) => `${name} ${block ? `${block.pct}%` : "not measured"}`)
+export function printMetrics(id: string, runDir: string, metrics: Metrics, app: App) {
+  const cost = metrics.cost_usd === null ? "unknown cost" : `about $${metrics.cost_usd.toFixed(2)}`
+  const outcome = metrics.status === "ok" ? outcomes[metrics.stop_reason ?? "success"] : outcomes[metrics.status]
   console.log(
     [
       `run_id ${id}`,
-      `status ${metrics.status}${metrics.stop_reason ? ` (${metrics.stop_reason})` : ""}`,
+      `Result: ${metrics.status}, ${outcome ?? metrics.stop_reason}`,
       ...(metrics.error ? [`error ${metrics.error}`] : []),
-      fixed
-        ? `fixed: ${metrics.n_tests} tests, ${metrics.evaluation.reruns} repetitions, ${fixed.stable_pass} stable_pass, ${fixed.broken} broken, ${fixed.flaky} flaky, ${fixed.skipped} skipped`
-        : "fixed: not evaluated",
-      buggy
-        ? `buggy: ${buggy.revealing} revealing, ${buggy.flaky_on_buggy} flaky_on_buggy, ${buggy.not_revealing} not_revealing, caught ${metrics.caught}, caught_strict ${metrics.caught_strict}`
-        : "buggy: not evaluated",
-      ...(bugs ? [`bugs: ${bugs.detected} of ${bugs.tested} detected`] : []),
-      `coverage: ${measured.join(", ")}`,
-      `cost ${metrics.cost_usd ?? "unknown"} USD (${metrics.cost_source ?? "no result"}), ${metrics.turns ?? "?"} turns`,
-      runDir,
+      `Agent: ${metrics.models?.join(", ") ?? "unknown model"}, ${plural(metrics.turns ?? 0, "turn")}, ${cost}`,
+      "",
+      ...fixedSummary(metrics),
+      "",
+      ...buggySummary(metrics),
+      "",
+      ...bugsSummary(metrics, app),
+      "What the tests reach:",
+      `  ${reach("lines of browser code run", metrics.coverage.lines)}`,
+      `  ${reach("page controls used (buttons, links, fields)", metrics.coverage.html)}`,
+      `  ${reach("API endpoints called", metrics.coverage.api)}`,
+      "",
+      `All files: ${runDir}`,
     ].join("\n"),
   )
+}
+
+function fixedSummary({ fixed, n_tests, evaluation }: Metrics) {
+  if (!fixed) return ["Correct app: not checked"]
+  return [
+    `Correct app: the agent wrote ${plural(n_tests ?? 0, "test")}, each ran ${plural(evaluation.reruns ?? 0, "time")}`,
+    `  ${fixed.stable_pass} always pass, only these can catch a bug`,
+    `  ${fixed.broken} always fail, ${fixed.flaky} pass only some times, ${fixed.skipped} skipped`,
+  ]
+}
+
+function buggySummary({ fixed, buggy, caught, caught_strict }: Metrics) {
+  if (!fixed || !buggy) return ["App with all known bugs: not checked"]
+  return [
+    `App with all known bugs: the ${plural(fixed.stable_pass, "test")} that always pass ran again`,
+    `  ${buggy.revealing} always fail, so they catch a bug`,
+    `  ${buggy.flaky_on_buggy} fail only some times, ${buggy.not_revealing} still pass`,
+    `  Bugs caught: ${caught ? "yes" : "no"}`,
+    `  Strict rule, every test must also pass on the correct app and have its own name: ${caught_strict ? "yes" : "no"}`,
+  ]
+}
+
+function bugsSummary({ bugs }: Metrics, app: App) {
+  if (!bugs) return []
+  const lines = Object.entries(bugs.by_bug).map(([id, verdicts]) => {
+    const found = verdicts.revealing > 0 ? `caught by ${plural(verdicts.revealing, "test")}` : "missed"
+    return `  ${id}: ${found}. ${app.bugs?.find(bug => bug.id === id)?.description ?? ""}`.trimEnd()
+  })
+  return [`One known bug at a time: ${bugs.detected} of ${bugs.tested} caught`, ...lines, ""]
+}
+
+function reach(label: string, block: Metrics["coverage"]["lines"]) {
+  return `${label}: ${block ? `${block.pct}% (${block.covered} of ${block.total})` : "not measured"}`
+}
+
+function plural(count: number, word: string) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`
 }
 
 async function fixed(runDir: string, reruns: number) {

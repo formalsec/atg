@@ -49,8 +49,8 @@ export async function mergeEnv(runDir: string, fields: Record<string, unknown>) 
   await writeJson(file, { ...current, ...fields })
 }
 
-export async function runStage(runDir: string, name: string, work: () => Promise<void>) {
-  console.error(name)
+export async function runStage(runDir: string, name: string, purpose: string, work: () => Promise<void>) {
+  console.error(`${name}: ${purpose}`)
   const started = performance.now()
   const error = await work().then(
     () => undefined,
@@ -61,7 +61,7 @@ export async function runStage(runDir: string, name: string, work: () => Promise
   const stages = existsSync(file) ? stagesSchema.parse(await readJson(file)) : {}
   stages[name] = { ms, error }
   await writeJson(file, stages)
-  console.error(error === undefined ? `${name} ${duration(ms)}` : `${name} failed after ${duration(ms)}: ${error}`)
+  console.error(error === undefined ? `${name} done in ${duration(ms)}` : `${name} failed after ${duration(ms)}: ${error}`)
   return error
 }
 

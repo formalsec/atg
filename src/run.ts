@@ -38,7 +38,7 @@ export async function run(file: string, options: Options) {
   await mkdir(runDir, { recursive: true })
   stopOnSignals(runDir, options.keepWorkspace)
 
-  const prepareError = await runStage(runDir, "prepare", () => prepare(runDir, config, app, versions))
+  const prepareError = await runStage(runDir, "prepare", preparePurpose(config), () => prepare(runDir, config, app, versions))
   if (options.dryRun) {
     if (prepareError) throw new Error(`prepare failed: ${prepareError}`)
     const invocation = await agentInvocation(runDir)
@@ -49,20 +49,33 @@ export async function run(file: string, options: Options) {
     return
   }
   try {
-    const generated = !prepareError && (await runStage(runDir, "generate", () => generate(runDir))) === undefined
+    const purpose = `${config.agent.model} writes Playwright tests for the app, its steps show below`
+    const generated = !prepareError && (await runStage(runDir, "generate", purpose, () => generate(runDir))) === undefined
     if (generated) await runEvaluation(runDir, Object.keys(evaluationStages), options.reruns)
   } finally {
     await release()
     if (!options.keepWorkspace) removeWorkspace(runDir)
   }
   const metrics = await finalize(runDir)
-  printMetrics(id, runDir, metrics)
+  printMetrics(id, runDir, metrics, app)
   if (metrics.status === "infra_error") process.exitCode = 1
 }
 
 export async function identify(config: Config, app: App) {
   const versions = await resolveVersions(app)
   return { id: runId(config, versions, promptTemplate), versions }
+}
+
+const inputNames: Record<Input, string> = {
+  code: "the source code",
+  examples: "example tests",
+  task: "the user stories",
+  url: "the address of the running app",
+}
+
+function preparePurpose(config: Config) {
+  const inputs = config.inputs.length > 0 ? config.inputs.map(input => inputNames[input]).join(", ") : "nothing"
+  return `make an empty folder for the agent and give it ${inputs}`
 }
 
 async function prepare(runDir: string, config: Config, app: App, versions: Versions) {

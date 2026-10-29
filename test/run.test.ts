@@ -142,7 +142,7 @@ describe("atg run with a fake agent", () => {
       },
     })
     assert.deepEqual(Object.keys(metrics.wall_ms), ["prepare", "generate", "fixed", "buggy", "bugs", "coverage"])
-    for (const stage of Object.keys(metrics.wall_ms)) assert.match(result.stderr, new RegExp(`${stage} \\d.* s$`, "m"))
+    for (const stage of Object.keys(metrics.wall_ms)) assert.match(result.stderr, new RegExp(`^${stage}: .+$[\\s\\S]*^${stage} done in \\d.* s$`, "m"))
     assert.match(result.stderr, /^ {2}Write tests\/todo\.spec\.ts$/m)
     const { fixed, buggy, bugs } = metrics.repetition_ms
     for (const runs of [fixed, buggy, bugs.counter, bugs.help]) assert.equal(runs.length, 3)
@@ -237,7 +237,7 @@ describe("atg run with a fake agent", () => {
     const agentOutput = statSync(join(runDir, "agent-stdout.txt")).mtimeMs
     const result = atgIn(runs, "eval", basename(runDir), "--only", "coverage")
     assert.equal(result.status, 0, result.stdout + result.stderr)
-    assert.match(result.stdout, /coverage: lines 73\.33%, html 50%, api 66\.67%/)
+    assert.match(result.stdout, /lines of browser code run: 73\.33% .*\n.*page controls used .*: 50% .*\n.*API endpoints called: 66\.67% /)
     const after = await readJsonFile(join(runDir, "metrics.json"))
     assert.deepEqual(after.coverage, before.coverage)
     assert.deepEqual(after.fixed, before.fixed)
