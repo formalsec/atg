@@ -10,9 +10,10 @@ import { exportVersion, holdUrl, resolveVersions, startApp, type Versions } from
 import * as claude from "./claude.ts"
 import { type App, appDir, type Config, findApp, type Input, loadApps, parseConfig, runId } from "./config.ts"
 import { installSignal, signalCommand } from "./coverage.ts"
-import { evaluationStages, finalize, printMetrics, runEvaluation } from "./evaluate.ts"
+import { evaluationStages, evaluationSteps, finalize, printMetrics, runEvaluation } from "./evaluate.ts"
 import * as playwright from "./playwright.ts"
 import { cleanEnv, quote, runWithTimeout } from "./process.ts"
+import { say, startProgress, stopProgress } from "./progress.ts"
 import { mergeEnv, readJson, readRun, removeWorkspace, runFiles, runStage, stopOnSignals, writeJson } from "./run-folder.ts"
 
 const exec = promisify(execFile)
@@ -37,6 +38,8 @@ export async function run(file: string, options: Options) {
   await rm(runDir, { recursive: true, force: true })
   await mkdir(runDir, { recursive: true })
   stopOnSignals(runDir, options.keepWorkspace)
+  const steps = evaluationSteps(Object.keys(evaluationStages), options.reruns, app)
+  if (!options.dryRun) startProgress({ prepare: 1, generate: 1, ...steps })
 
   const prepareError = await runStage(runDir, "prepare", preparePurpose(config), () => prepare(runDir, config, app, versions))
   if (options.dryRun) {
@@ -53,6 +56,7 @@ export async function run(file: string, options: Options) {
     const generated = !prepareError && (await runStage(runDir, "generate", purpose, () => generate(runDir))) === undefined
     if (generated) await runEvaluation(runDir, Object.keys(evaluationStages), options.reruns)
   } finally {
+    stopProgress()
     await release()
     if (!options.keepWorkspace) removeWorkspace(runDir)
   }
@@ -225,7 +229,7 @@ function showActivity(activity: string | undefined, workspaces: string[]) {
   if (activity === undefined) return
   const short = workspaces.reduce((text, workspace) => text.replaceAll(`${workspace}/`, ""), activity)
   const width = process.stderr.isTTY ? process.stderr.columns - 2 : Infinity
-  for (const line of short.split("\n")) console.error(`  ${line.length > width ? `${line.slice(0, width - 1)}…` : line}`)
+  for (const line of short.split("\n")) say(`  ${line.length > width ? `${line.slice(0, width - 1)}…` : line}`)
 }
 
 function followOutput(file: string, onLine: (line: string) => void) {

@@ -7,6 +7,7 @@ import { agentResultSchema } from "./claude.ts"
 import type { App } from "./config.ts"
 import { type Coverage, coverage, coverageSchema, coverageSummary } from "./coverage.ts"
 import * as playwright from "./playwright.ts"
+import { showStep, startProgress, stepDone, stopProgress } from "./progress.ts"
 import { mergeEnv, readJson, readRun, runFiles, runStage, stagesSchema, stopOnSignals, writeJson } from "./run-folder.ts"
 
 const protocolVersion = 1
@@ -21,7 +22,7 @@ type Repetitions = z.infer<typeof repetitionsSchema>
 
 type Run = Awaited<ReturnType<typeof readRun>>
 
-type Version = { sha: string; dir: string; reruns: number; only?: string[] }
+type Version = { label: string; sha: string; dir: string; reruns: number; only?: string[] }
 
 type Status = playwright.SuiteResult["tests"][number]["status"]
 type Repetition = { key: string; status: Status }[]
@@ -37,20 +38,30 @@ type Verdict = {
 
 type Classification = { tests: Verdict[]; duplicates: string[] }
 
-type Stage = { purpose: (reruns: number) => string; run: (runDir: string, reruns: number) => Promise<void> }
+type Stage = {
+  purpose: (reruns: number) => string
+  steps: (reruns: number, bugs: number) => number
+  run: (runDir: string, reruns: number) => Promise<void>
+}
 
 export const evaluationStages: Record<string, Stage> = {
   fixed: {
     purpose: reruns => `run every test ${plural(reruns, "time")} on the correct app, to keep only the tests that always pass`,
+    steps: reruns => reruns,
     run: fixed,
   },
   buggy: {
     purpose: reruns =>
       `run those tests ${plural(reruns, "time")} on the app with all known bugs, a test that catches a bug waits for its timeout, so this is slower`,
+    steps: reruns => reruns,
     run: buggy,
   },
-  bugs: { purpose: reruns => `run those tests ${plural(reruns, "time")} on each app that has only one of the known bugs`, run: bugs },
-  coverage: { purpose: () => "run the tests once more, to measure how much of the app they reach", run: coverage },
+  bugs: {
+    purpose: reruns => `run those tests ${plural(reruns, "time")} on each app that has only one of the known bugs`,
+    steps: (reruns, bugs) => reruns * bugs,
+    run: bugs,
+  },
+  coverage: { purpose: () => "run the tests once more, to measure how much of the app they reach", steps: () => 1, run: coverage },
 }
 
 const outcomes: Record<string, string> = {
@@ -74,14 +85,21 @@ export async function evaluateRun(runId: string, options: Options) {
   stopOnSignals(runDir, true)
   const { app } = await readRun(runDir)
   const release = await holdUrl(app.url)
+  const names = options.only ? [options.only] : Object.keys(evaluationStages)
+  startProgress(evaluationSteps(names, options.reruns, app))
   try {
-    await runEvaluation(runDir, options.only ? [options.only] : Object.keys(evaluationStages), options.reruns)
+    await runEvaluation(runDir, names, options.reruns)
   } finally {
+    stopProgress()
     await release()
   }
   const metrics = await finalize(runDir)
   printMetrics(runId, runDir, metrics, app)
   if (metrics.status === "infra_error") process.exitCode = 1
+}
+
+export function evaluationSteps(names: string[], reruns: number, app: App) {
+  return Object.fromEntries(names.map(name => [name, evaluationStages[name].steps(reruns, app.bugs?.length ?? 0)]))
 }
 
 export async function runEvaluation(runDir: string, names: string[], reruns: number) {
@@ -158,7 +176,7 @@ async function fixed(runDir: string, reruns: number) {
   const results = join(runDir, runFiles.results)
   for (const stale of ["buggy", "bugs"]) await rm(join(results, stale), { recursive: true, force: true })
   const dir = join(results, "fixed")
-  const { repetitions, versions } = await repeat(runDir, run, { sha: run.env.app.fixed.sha, dir, reruns })
+  const { repetitions, versions } = await repeat(runDir, run, { label: "correct app", sha: run.env.app.fixed.sha, dir, reruns })
   await writeJson(join(dir, repetitionsFile), repetitions)
   await mergeEnv(runDir, {
     framework: { name: run.config.framework, versions },
@@ -170,7 +188,7 @@ async function buggy(runDir: string, reruns: number) {
   const run = await readRun(runDir)
   const only = await stableTests(runDir, reruns)
   const dir = join(runDir, runFiles.results, "buggy")
-  const { repetitions } = await repeat(runDir, run, { sha: run.env.app.buggy.sha, dir, reruns, only })
+  const { repetitions } = await repeat(runDir, run, { label: "app with all known bugs", sha: run.env.app.buggy.sha, dir, reruns, only })
   await writeJson(join(dir, repetitionsFile), repetitions)
 }
 
@@ -185,7 +203,8 @@ async function bugs(runDir: string, reruns: number) {
   await mergeEnv(runDir, { bugs: list.map((bug, index) => ({ id: bug.id, ref: bug.ref, sha: shas[index] })) })
   const results: Record<string, Repetitions> = {}
   for (const [index, bug] of list.entries()) {
-    results[bug.id] = (await repeat(runDir, run, { sha: shas[index], dir: join(dir, bug.id), reruns, only })).repetitions
+    results[bug.id] = (await repeat(runDir, run, { label: `app with bug ${bug.id}`, sha: shas[index], dir: join(dir, bug.id), reruns, only }))
+      .repetitions
   }
   await writeJson(join(dir, repetitionsFile), results)
 }
@@ -201,13 +220,14 @@ async function stableTests(runDir: string, reruns: number) {
   return tests.filter(test => test.fixed === "stable_pass").map(test => test.key)
 }
 
-async function repeat(runDir: string, { config, app }: Run, { sha, dir, reruns, only }: Version) {
+async function repeat(runDir: string, { config, app }: Run, { label, sha, dir, reruns, only }: Version) {
   await rm(dir, { recursive: true, force: true })
   await mkdir(dir, { recursive: true })
   const repetitions: Repetitions = []
   let versions: Record<string, string> = {}
   const count = only?.length === 0 ? 0 : reruns
   for (let n = 1; n <= count; n++) {
+    showStep(`${label}, run ${n} of ${count}`)
     const started = performance.now()
     const instance = await startApp(app, sha, join(dir, `${n}-app.log`))
     const result = await playwright
@@ -225,6 +245,7 @@ async function repeat(runDir: string, { config, app }: Run, { sha, dir, reruns, 
     if (missing.length > 0) throw new Error(`the suite run did not report the selected tests: ${missing.join(", ")}`)
     repetitions.push({ ms: Math.round(performance.now() - started), tests, errors: result.errors })
     versions = result.versions
+    stepDone()
   }
   return { repetitions, versions }
 }

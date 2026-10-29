@@ -5,6 +5,7 @@ import { join } from "node:path"
 import * as z from "zod"
 import { configSchema, findApp, loadApps } from "./config.ts"
 import { killAll } from "./process.ts"
+import { beginStage, endStage, say, stopProgress } from "./progress.ts"
 
 export const runFiles = {
   config: "config.json",
@@ -50,7 +51,8 @@ export async function mergeEnv(runDir: string, fields: Record<string, unknown>) 
 }
 
 export async function runStage(runDir: string, name: string, purpose: string, work: () => Promise<void>) {
-  console.error(`${name}: ${purpose}`)
+  say(`${name}: ${purpose}`)
+  beginStage(name)
   const started = performance.now()
   const error = await work().then(
     () => undefined,
@@ -61,7 +63,8 @@ export async function runStage(runDir: string, name: string, purpose: string, wo
   const stages = existsSync(file) ? stagesSchema.parse(await readJson(file)) : {}
   stages[name] = { ms, error }
   await writeJson(file, stages)
-  console.error(error === undefined ? `${name} done in ${duration(ms)}` : `${name} failed after ${duration(ms)}: ${error}`)
+  endStage()
+  say(error === undefined ? `${name} done in ${duration(ms)}` : `${name} failed after ${duration(ms)}: ${error}`)
   return error
 }
 
@@ -76,6 +79,7 @@ export function duration(ms: number) {
 export function stopOnSignals(runDir: string, keepWorkspace = false) {
   for (const name of stopSignals) {
     process.once(name, () => {
+      stopProgress()
       killAll()
       removeTempDirs()
       if (!keepWorkspace) removeWorkspace(runDir)
